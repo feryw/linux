@@ -1049,12 +1049,8 @@ void rtw_txpwr_lmt_add_with_nlen(struct rf_ctl_t *rfctl, const char *regd_name, 
 	while ((rtw_end_of_queue_search(head, cur)) == _FALSE) {
 		ent = LIST_CONTAINOR(cur, struct txpwr_lmt_ent, list);
 		cur = get_next(cur);
-		#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 1))
-		if (_rtw_memcmp(ent->regd_name, regd_name, nlen) == _TRUE)
-		#else
 		if (strlen(ent->regd_name) == nlen
 			&& _rtw_memcmp(ent->regd_name, regd_name, nlen) == _TRUE)
-		#endif
 			goto chk_lmt_val;
 	}
 
@@ -1228,7 +1224,7 @@ s8 rtw_rf_get_kfree_tx_gain_offset(_adapter *padapter, u8 path, u8 ch)
 		kfree_offset = kfree_data->bb_gain[bb_gain_sel][path];
 		if (IS_HARDWARE_TYPE_8723D(padapter))
 			RTW_INFO("%s path:%s, ch:%u, bb_gain_sel:%d, kfree_offset:%d\n"
-				, __func__, (path == 0)?"S1":"S0", 
+				, __func__, (path == 0)?"S1":"S0",
 				ch, bb_gain_sel, kfree_offset);
 		else
 			RTW_INFO("%s path:%u, ch:%u, bb_gain_sel:%d, kfree_offset:%d\n"
@@ -1259,7 +1255,7 @@ void rtw_rf_set_tx_gain_offset(_adapter *adapter, u8 path, s8 offset)
 		target_path = path;
 		RTW_INFO("kfree gain_offset 0x55:0x%x ", rtw_hal_read_rfreg(adapter, target_path, 0x55, 0xffffffff));
 	}
-	
+
 	switch (rtw_get_chip_type(adapter)) {
 #ifdef CONFIG_RTL8723D
 	case RTL8723D:
@@ -1304,7 +1300,7 @@ void rtw_rf_set_tx_gain_offset(_adapter *adapter, u8 path, s8 offset)
 #if defined(CONFIG_RTL8814A) || defined(CONFIG_RTL8822B) || defined(CONFIG_RTL8821C) || defined(CONFIG_RTL8192F) || defined(CONFIG_RTL8822C)
 	case RTL8814A:
 	case RTL8822B:
-	case RTL8822C:	
+	case RTL8822C:
 	case RTL8821C:
 	case RTL8192F:
 		RTW_INFO("\nkfree by PhyDM on the sw CH. path %d\n", path);
@@ -1315,7 +1311,7 @@ void rtw_rf_set_tx_gain_offset(_adapter *adapter, u8 path, s8 offset)
 		rtw_warn_on(1);
 		break;
 	}
-	
+
 	if (IS_HARDWARE_TYPE_8723D(adapter)) {
 		if (path == PPG_8723D_S1)
 			val32 = rtw_hal_read_rfreg(adapter, target_path, 0x55, 0xffffffff);
