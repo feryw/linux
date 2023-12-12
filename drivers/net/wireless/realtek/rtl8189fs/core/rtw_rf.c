@@ -1049,9 +1049,12 @@ void rtw_txpwr_lmt_add_with_nlen(struct rf_ctl_t *rfctl, const char *regd_name, 
 	while ((rtw_end_of_queue_search(head, cur)) == _FALSE) {
 		ent = LIST_CONTAINOR(cur, struct txpwr_lmt_ent, list);
 		cur = get_next(cur);
-
+		#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 1))
+		if (_rtw_memcmp(ent->regd_name, regd_name, nlen) == _TRUE)
+		#else
 		if (strlen(ent->regd_name) == nlen
 			&& _rtw_memcmp(ent->regd_name, regd_name, nlen) == _TRUE)
+		#endif
 			goto chk_lmt_val;
 	}
 
