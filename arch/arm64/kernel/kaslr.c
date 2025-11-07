@@ -29,7 +29,7 @@ void __init kaslr_init(void)
 	 * of less than MIN_KIMG_ALIGN means that no seed was provided.
 	 */
 	if (kaslr_offset() < MIN_KIMG_ALIGN) {
-		pr_warn("KASLR disabled due to lack of seed\n");
+		pr_warn("\n");
 		return;
 	}
 
