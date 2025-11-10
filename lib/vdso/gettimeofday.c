@@ -17,13 +17,6 @@ u64 vdso_calc_delta(u64 cycles, u64 last, u64 mask, u32 mult)
 }
 #endif
 
-#ifndef __arch_vdso_hres_capable
-static inline bool __arch_vdso_hres_capable(void)
-{
-	return true;
-}
-#endif
-
 static __always_inline int do_hres(const struct vdso_data *vd, clockid_t clk,
 		   struct __kernel_timespec *ts)
 {

@@ -277,7 +277,7 @@ static int __maybe_unused meson_vrtc_suspend(struct device *dev)
 #endif
 		struct timespec64 time;
 
-		ktime_get_raw_ts64(&time);
+		ktime_get_real_ts64(&time);
 		local_time = time.tv_sec;
 
 #ifdef CONFIG_AMLOGIC_MODIFY
