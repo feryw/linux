@@ -32,6 +32,7 @@ struct kmem_cache {
 
 #else /* !CONFIG_SLOB */
 
+#ifndef CONFIG_AMLOGIC_SLAB_TRACE
 struct memcg_cache_array {
 	struct rcu_head rcu;
 	struct kmem_cache *entries[0];
@@ -93,6 +94,7 @@ struct memcg_cache_params {
 		};
 	};
 };
+#endif
 #endif /* CONFIG_SLOB */
 
 #ifdef CONFIG_SLAB
@@ -369,7 +371,7 @@ static __always_inline int memcg_charge_slab(struct page *page,
 	if (ret)
 		goto out;
 
-	lruvec = mem_cgroup_lruvec(page_pgdat(page), memcg);
+	lruvec = mem_cgroup_lruvec(memcg, page_pgdat(page));
 	mod_lruvec_state(lruvec, cache_vmstat_idx(s), 1 << order);
 
 	/* transer try_charge() page references to kmem_cache */
@@ -393,7 +395,7 @@ static __always_inline void memcg_uncharge_slab(struct page *page, int order,
 	rcu_read_lock();
 	memcg = READ_ONCE(s->memcg_params.memcg);
 	if (likely(!mem_cgroup_is_root(memcg))) {
-		lruvec = mem_cgroup_lruvec(page_pgdat(page), memcg);
+		lruvec = mem_cgroup_lruvec(memcg, page_pgdat(page));
 		mod_lruvec_state(lruvec, cache_vmstat_idx(s), -(1 << order));
 		memcg_kmem_uncharge_memcg(page, order, memcg);
 	} else {

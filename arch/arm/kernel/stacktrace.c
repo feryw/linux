@@ -4,6 +4,10 @@
 #include <linux/sched/debug.h>
 #include <linux/stacktrace.h>
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+#include <linux/module.h>
+#endif
+
 #include <asm/sections.h>
 #include <asm/stacktrace.h>
 #include <asm/traps.h>
@@ -92,7 +96,18 @@ struct stack_trace_data {
 	unsigned int skip;
 };
 
-static int save_trace(struct stackframe *frame, void *d)
+#ifdef CONFIG_AMLOGIC_MODIFY
+static inline bool kernel_or_module_addr(unsigned long addr)
+{
+	if (addr >= (unsigned long)_stext && addr < (unsigned long)_end)
+		return true;
+	if (is_module_address((unsigned long)addr))
+		return true;
+	return false;
+}
+#endif
+
+static int notrace save_trace(struct stackframe *frame, void *d)
 {
 	struct stack_trace_data *data = d;
 	struct stack_trace *trace = data->trace;
@@ -106,7 +121,12 @@ static int save_trace(struct stackframe *frame, void *d)
 		return 0;
 	}
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+	if (kernel_or_module_addr(addr))
+		trace->entries[trace->nr_entries++] = addr;
+#else
 	trace->entries[trace->nr_entries++] = addr;
+#endif
 
 	if (trace->nr_entries >= trace->max_entries)
 		return 1;
@@ -118,14 +138,20 @@ static int save_trace(struct stackframe *frame, void *d)
 	if ((unsigned long)&regs[1] > ALIGN(frame->sp, THREAD_SIZE))
 		return 0;
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+	if (kernel_or_module_addr(regs->ARM_pc))
+		trace->entries[trace->nr_entries++] = regs->ARM_pc;
+#else
 	trace->entries[trace->nr_entries++] = regs->ARM_pc;
+#endif
 
 	return trace->nr_entries >= trace->max_entries;
 }
 
 /* This must be noinline to so that our skip calculation works correctly */
-static noinline void __save_stack_trace(struct task_struct *tsk,
-	struct stack_trace *trace, unsigned int nosched)
+static noinline void notrace __save_stack_trace(struct task_struct *tsk,
+						struct stack_trace *trace,
+						unsigned int nosched)
 {
 	struct stack_trace_data data;
 	struct stackframe frame;
@@ -160,7 +186,8 @@ static noinline void __save_stack_trace(struct task_struct *tsk,
 	walk_stackframe(&frame, save_trace, &data);
 }
 
-void save_stack_trace_regs(struct pt_regs *regs, struct stack_trace *trace)
+void notrace
+save_stack_trace_regs(struct pt_regs *regs, struct stack_trace *trace)
 {
 	struct stack_trace_data data;
 	struct stackframe frame;
@@ -177,13 +204,14 @@ void save_stack_trace_regs(struct pt_regs *regs, struct stack_trace *trace)
 	walk_stackframe(&frame, save_trace, &data);
 }
 
-void save_stack_trace_tsk(struct task_struct *tsk, struct stack_trace *trace)
+void notrace
+save_stack_trace_tsk(struct task_struct *tsk, struct stack_trace *trace)
 {
 	__save_stack_trace(tsk, trace, 1);
 }
 EXPORT_SYMBOL(save_stack_trace_tsk);
 
-void save_stack_trace(struct stack_trace *trace)
+void notrace save_stack_trace(struct stack_trace *trace)
 {
 	__save_stack_trace(current, trace, 0);
 }

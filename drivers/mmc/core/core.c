@@ -37,6 +37,7 @@
 
 #include "core.h"
 #include "card.h"
+#include "crypto.h"
 #include "bus.h"
 #include "host.h"
 #include "sdio_bus.h"
@@ -215,6 +216,7 @@ EXPORT_SYMBOL(mmc_request_done);
 
 static void __mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
 {
+#ifndef CONFIG_MMC_MESON_GX
 	int err;
 
 	/* Assumes host controller has been runtime resumed by mmc_claim_host */
@@ -224,7 +226,7 @@ static void __mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
 		mmc_request_done(host, mrq);
 		return;
 	}
-
+#endif
 	/*
 	 * For sdio rw commands we must wait for card busy otherwise some
 	 * sdio devices won't work properly.
@@ -455,9 +457,11 @@ int mmc_cqe_start_req(struct mmc_host *host, struct mmc_request *mrq)
 	 * active requests i.e. this is the first.  Note, re-tuning will call
 	 * ->cqe_off().
 	 */
+#ifndef CONFIG_MMC_MESON_GX
 	err = mmc_retune(host);
 	if (err)
 		goto out_err;
+#endif
 
 	mrq->host = host;
 
@@ -1012,6 +1016,8 @@ void mmc_set_initial_state(struct mmc_host *host)
 		host->ops->hs400_enhanced_strobe(host, &host->ios);
 
 	mmc_set_ios(host);
+
+	mmc_crypto_set_initial_state(host);
 }
 
 /**
@@ -1363,6 +1369,7 @@ void mmc_power_up(struct mmc_host *host, u32 ocr)
 	 */
 	mmc_delay(host->ios.power_delay_ms);
 }
+EXPORT_SYMBOL(mmc_power_up);
 
 void mmc_power_off(struct mmc_host *host)
 {
@@ -2169,7 +2176,9 @@ EXPORT_SYMBOL(mmc_sw_reset);
 static int mmc_rescan_try_freq(struct mmc_host *host, unsigned freq)
 {
 	host->f_init = freq;
-
+#ifdef CONFIG_AMLOGIC_MODIFY
+	host->first_init_flag = 1;
+#endif
 	pr_debug("%s: %s: trying to init card at %u Hz\n",
 		mmc_hostname(host), __func__, host->f_init);
 

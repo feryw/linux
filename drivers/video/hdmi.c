@@ -71,7 +71,11 @@ EXPORT_SYMBOL(hdmi_avi_infoframe_init);
 static int hdmi_avi_infoframe_check_only(const struct hdmi_avi_infoframe *frame)
 {
 	if (frame->type != HDMI_INFOFRAME_TYPE_AVI ||
-	    frame->version != 2 ||
+	/* refer to CTA-861-H Page 69 */
+#ifdef CONFIG_AMLOGIC_MODIFY
+	    frame->version < 2 ||
+	    frame->version > 4 ||
+#endif
 	    frame->length != HDMI_AVI_INFOFRAME_SIZE)
 		return -EINVAL;
 
@@ -163,7 +167,11 @@ ssize_t hdmi_avi_infoframe_pack_only(const struct hdmi_avi_infoframe *frame,
 	if (frame->itc)
 		ptr[2] |= BIT(7);
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+	ptr[3] = frame->video_code;
+#else
 	ptr[3] = frame->video_code & 0x7f;
+#endif
 
 	ptr[4] = ((frame->ycc_quantization_range & 0x3) << 6) |
 		 ((frame->content_type & 0x3) << 4) |
@@ -231,8 +239,13 @@ int hdmi_spd_infoframe_init(struct hdmi_spd_infoframe *frame,
 	frame->version = 1;
 	frame->length = HDMI_SPD_INFOFRAME_SIZE;
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+	memcpy(frame->vendor, vendor, sizeof(frame->vendor));
+	memcpy(frame->product, product, sizeof(frame->product));
+#else
 	strncpy(frame->vendor, vendor, sizeof(frame->vendor));
 	strncpy(frame->product, product, sizeof(frame->product));
+#endif
 
 	return 0;
 }
@@ -978,11 +991,19 @@ EXPORT_SYMBOL(hdmi_infoframe_pack);
 
 static const char *hdmi_infoframe_type_get_name(enum hdmi_infoframe_type type)
 {
+#ifdef CONFIG_AMLOGIC_MODIFY
+	if (type < 0x80 || (type > 0x9f && type != HDMI_INFOFRAME_TYPE_VENDOR2))
+#else
 	if (type < 0x80 || type > 0x9f)
+#endif
 		return "Invalid";
 	switch (type) {
 	case HDMI_INFOFRAME_TYPE_VENDOR:
 		return "Vendor";
+#ifdef CONFIG_AMLOGIC_MODIFY
+	case HDMI_INFOFRAME_TYPE_VENDOR2:
+		return "Vendor2";
+#endif
 	case HDMI_INFOFRAME_TYPE_AVI:
 		return "Auxiliary Video Information (AVI)";
 	case HDMI_INFOFRAME_TYPE_SPD:
@@ -1529,6 +1550,11 @@ void hdmi_infoframe_log(const char *level,
 	case HDMI_INFOFRAME_TYPE_VENDOR:
 		hdmi_vendor_any_infoframe_log(level, dev, &frame->vendor);
 		break;
+#ifdef CONFIG_AMLOGIC_MODIFY
+	case HDMI_INFOFRAME_TYPE_VENDOR2:
+		/* not implemented */
+		break;
+#endif
 	case HDMI_INFOFRAME_TYPE_DRM:
 		hdmi_drm_infoframe_log(level, dev, &frame->drm);
 		break;
@@ -1559,7 +1585,10 @@ static int hdmi_avi_infoframe_unpack(struct hdmi_avi_infoframe *frame,
 		return -EINVAL;
 
 	if (ptr[0] != HDMI_INFOFRAME_TYPE_AVI ||
-	    ptr[1] != 2 ||
+#ifdef CONFIG_AMLOGIC_MODIFY
+	    ptr[1] < 2 ||
+	    ptr[1] > 4 ||
+#endif
 	    ptr[2] != HDMI_AVI_INFOFRAME_SIZE)
 		return -EINVAL;
 
@@ -1594,7 +1623,11 @@ static int hdmi_avi_infoframe_unpack(struct hdmi_avi_infoframe *frame,
 	frame->quantization_range = (ptr[2] >> 2) & 0x3;
 	frame->nups = ptr[2] & 0x3;
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+	frame->video_code = ptr[3];
+#else
 	frame->video_code = ptr[3] & 0x7f;
+#endif
 	frame->ycc_quantization_range = (ptr[4] >> 6) & 0x3;
 	frame->content_type = (ptr[4] >> 4) & 0x3;
 

@@ -31,6 +31,10 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/list.h>
+#ifdef CONFIG_AMLOGIC_VMAP
+#include <linux/amlogic/vmap_stack.h>
+#include <asm/irq.h>
+#endif
 
 #include <asm/stacktrace.h>
 #include <asm/traps.h>
@@ -236,7 +240,11 @@ static int unwind_pop_register(struct unwind_ctrl_block *ctrl,
 		if (*vsp >= (unsigned long *)ctrl->sp_high)
 			return -URC_FAILURE;
 
-	ctrl->vrs[reg] = *(*vsp)++;
+	/* Use READ_ONCE_NOCHECK here to avoid this memory access
+	 * from being tracked by KASAN.
+	 */
+	ctrl->vrs[reg] = READ_ONCE_NOCHECK(*(*vsp));
+	(*vsp)++;
 	return URC_OK;
 }
 
@@ -372,7 +380,7 @@ error:
  * Unwind a single frame starting with *sp for the symbol at *pc. It
  * updates the *pc and *sp with the new values.
  */
-int unwind_frame(struct stackframe *frame)
+int notrace unwind_frame(struct stackframe *frame)
 {
 	unsigned long low;
 	const struct unwind_idx *idx;
@@ -389,10 +397,19 @@ int unwind_frame(struct stackframe *frame)
 		return -URC_FAILURE;
 
 	idx = unwind_find_idx(frame->pc);
+#ifdef CONFIG_AMLOGIC_MODIFY
+	if (!idx)
+		idx = unwind_find_idx(frame->lr);
+	if (!idx) {
+		pr_warn("unwind: Index not found, pc=%08lx, lr=%08lx\n", frame->pc, frame->lr);
+		return -URC_FAILURE;
+	}
+#else /* !CONFIG_AMLOGIC_MODIFY */
 	if (!idx) {
 		pr_warn("unwind: Index not found %08lx\n", frame->pc);
 		return -URC_FAILURE;
 	}
+#endif /* CONFIG_AMLOGIC_MODIFY */
 
 	ctrl.vrs[FP] = frame->fp;
 	ctrl.vrs[SP] = frame->sp;
@@ -455,6 +472,24 @@ int unwind_frame(struct stackframe *frame)
 	return URC_OK;
 }
 
+#ifdef CONFIG_AMLOGIC_VMAP
+static void dump_backtrace_entry_fp(unsigned long where, unsigned long fp,
+				    unsigned long sp)
+{
+#ifdef CONFIG_CC_IS_CLANG
+	signed long fp_size = 0;
+
+	fp_size = fp - sp + 4;
+	if (fp_size < 0 || !fp)
+		fp_size = 0;
+	pr_info("[%08lx+%4ld][<%08lx>] %pS\n",
+		fp, fp_size, where, (void *)where);
+#else
+	pr_info("[<%08lx>] %pS\n", where, (void *)where);
+#endif
+}
+#endif
+
 void unwind_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 {
 	struct stackframe frame;
@@ -491,9 +526,43 @@ void unwind_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 		unsigned long where = frame.pc;
 
 		urc = unwind_frame(&frame);
+	#ifdef CONFIG_AMLOGIC_VMAP
+		if (urc < 0) {
+			int keep = 0;
+			int cpu;
+			unsigned long addr;
+			struct pt_regs *pt_regs;
+
+			cpu = raw_smp_processor_id();
+			/* continue search for irq stack */
+			if (on_vmap_irq_stack(frame.sp, cpu)) {
+				unsigned long sp_irq;
+
+				keep = 1;
+				sp_irq   = (unsigned long)irq_stack[cpu];
+				addr     = *((unsigned long *)(sp_irq +
+					      THREAD_INFO_OFFSET - 8));
+				pt_regs  = (struct pt_regs *)addr;
+				frame.fp = pt_regs->ARM_fp;
+				frame.sp = pt_regs->ARM_sp;
+				frame.lr = pt_regs->ARM_lr;
+				frame.pc = pt_regs->ARM_pc;
+			}
+			if (!keep)
+				break;
+		}
+		where = frame.pc;
+		/*
+		 * The last "where" may be an invalid one,
+		 * rechecking it
+		 */
+		if (kernel_text_address(where))
+			dump_backtrace_entry_fp(where, frame.fp, frame.sp);
+	#else
 		if (urc < 0)
 			break;
 		dump_backtrace_entry(where, frame.pc, frame.sp - 4);
+	#endif
 	}
 }
 

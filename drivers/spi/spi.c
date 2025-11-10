@@ -1087,7 +1087,11 @@ static int spi_transfer_wait(struct spi_controller *ctlr,
 			return -EINTR;
 		}
 	} else {
+#ifdef CONFIG_AMLOGIC_MODIFY
+		ms = 32LL * 1000LL * xfer->len;
+#else
 		ms = 8LL * 1000LL * xfer->len;
+#endif
 		do_div(ms, xfer->speed_hz);
 		ms += ms + 200; /* some tolerance */
 
@@ -3175,7 +3179,29 @@ int spi_setup(struct spi_device *spi)
 	if (spi->controller->setup)
 		status = spi->controller->setup(spi);
 
-	spi_set_cs(spi, false);
+	if (spi->controller->auto_runtime_pm && spi->controller->set_cs) {
+		status = pm_runtime_get_sync(spi->controller->dev.parent);
+		if (status < 0) {
+			pm_runtime_put_noidle(spi->controller->dev.parent);
+			dev_err(&spi->controller->dev, "Failed to power device: %d\n",
+				status);
+			return status;
+		}
+
+		/*
+		 * We do not want to return positive value from pm_runtime_get,
+		 * there are many instances of devices calling spi_setup() and
+		 * checking for a non-zero return value instead of a negative
+		 * return value.
+		 */
+		status = 0;
+
+		spi_set_cs(spi, false);
+		pm_runtime_mark_last_busy(spi->controller->dev.parent);
+		pm_runtime_put_autosuspend(spi->controller->dev.parent);
+	} else {
+		spi_set_cs(spi, false);
+	}
 
 	if (spi->rt && !spi->controller->rt) {
 		spi->controller->rt = true;
@@ -3300,6 +3326,10 @@ static int __spi_validate(struct spi_device *spi, struct spi_message *message)
 			w_size = 1;
 		else if (xfer->bits_per_word <= 16)
 			w_size = 2;
+#ifdef CONFIG_AMLOGIC_MODIFY
+		else if (xfer->bits_per_word > 32)
+			w_size = 8;
+#endif
 		else
 			w_size = 4;
 

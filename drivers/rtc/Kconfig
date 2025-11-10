@@ -309,6 +309,10 @@ config RTC_DRV_HYM8563
 	  This driver can also be built as a module. If so, the module
 	  will be called rtc-hym8563.
 
+config RTC_DRV_HYM8563_SHW_PATCH
+	bool "Apply Shiningworth patch"
+	depends on RTC_DRV_HYM8563
+
 config RTC_DRV_LP8788
 	tristate "TI LP8788 RTC driver"
 	depends on MFD_LP8788
@@ -378,7 +382,7 @@ config RTC_DRV_MAX77686
 config RTC_DRV_MESON_VRTC
 	tristate "Amlogic Meson Virtual RTC"
 	depends on ARCH_MESON || COMPILE_TEST
-	default m if ARCH_MESON
+	default n
 	help
 	  If you say yes here you will get support for the
 	  Virtual RTC of Amlogic SoCs.

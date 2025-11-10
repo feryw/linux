@@ -1427,7 +1427,7 @@ EXPORT_SYMBOL_GPL(__lock_page_killable);
 int __lock_page_or_retry(struct page *page, struct mm_struct *mm,
 			 unsigned int flags)
 {
-	if (flags & FAULT_FLAG_ALLOW_RETRY) {
+	if (fault_flag_allow_retry_first(flags)) {
 		/*
 		 * CAUTION! In this case, mmap_sem is not released
 		 * even though return 0.
@@ -1687,7 +1687,11 @@ no_page:
 		if (fgp_flags & FGP_NOFS)
 			gfp_mask &= ~__GFP_FS;
 
+#ifdef CONFIG_AMLOGIC_CMA
+		page = __page_cache_alloc(gfp_mask | __GFP_NO_FC_IN_CMA);
+#else
 		page = __page_cache_alloc(gfp_mask);
+#endif
 		if (!page)
 			return NULL;
 
@@ -2783,7 +2787,11 @@ static struct page *do_read_cache_page(struct address_space *mapping,
 repeat:
 	page = find_get_page(mapping, index);
 	if (!page) {
+#ifdef CONFIG_AMLOGIC_CMA
+		page = __page_cache_alloc(gfp | __GFP_NO_FC_IN_CMA);
+#else
 		page = __page_cache_alloc(gfp);
+#endif
 		if (!page)
 			return ERR_PTR(-ENOMEM);
 		err = add_to_page_cache_lru(page, mapping, index, gfp);

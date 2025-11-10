@@ -60,6 +60,11 @@
 #include "braille.h"
 #include "internal.h"
 
+#ifdef CONFIG_AMLOGIC_DEBUG_FTRACE_PSTORE
+#include <../../../fs/pstore/internal.h>
+static size_t print_time(u64 ts, char *buf);
+#endif
+
 int console_printk[4] = {
 	CONSOLE_LOGLEVEL_DEFAULT,	/* console_loglevel */
 	MESSAGE_LOGLEVEL_DEFAULT,	/* default_message_loglevel */
@@ -378,6 +383,9 @@ struct printk_log {
 #ifdef CONFIG_PRINTK_CALLER
 	u32 caller_id;            /* thread id or processor id */
 #endif
+#ifdef CONFIG_AMLOGIC_MODIFY
+	int cpu;
+#endif
 }
 #ifdef CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS
 __packed __aligned(4)
@@ -421,6 +429,9 @@ DEFINE_RAW_SPINLOCK(logbuf_lock);
 
 #ifdef CONFIG_PRINTK
 DECLARE_WAIT_QUEUE_HEAD(log_wait);
+#ifdef CONFIG_AMLOGIC_MODIFY
+static int curr_cpu;
+#endif
 /* the next printk record to read by syslog(READ) or /proc/kmsg */
 static u64 syslog_seq;
 static u32 syslog_idx;
@@ -449,7 +460,7 @@ static u32 clear_idx;
 #else
 #define PREFIX_MAX		32
 #endif
-#define LOG_LINE_MAX		(1024 - PREFIX_MAX)
+#define LOG_LINE_MAX		(1536 - PREFIX_MAX)
 
 #define LOG_LEVEL(v)		((v) & 0x07)
 #define LOG_FACILITY(v)		((v) >> 3 & 0xff)
@@ -614,6 +625,30 @@ static u32 truncate_msg(u16 *text_len, u16 *trunc_msg_len,
 	return msg_used_size(*text_len + *trunc_msg_len, 0, pad_len);
 }
 
+#ifdef CONFIG_AMLOGIC_DEBUG_FTRACE_PSTORE
+static void record_buf(struct printk_log *msg, const char *text, u16 text_len)
+{
+	int len;
+	static char buf[1600];
+	struct pstore_record record = {
+		.psi = psinfo,
+	};
+
+	len = print_time(msg->ts_nsec, buf);
+	buf[len] = '<';
+	buf[len + 1] = '0' + msg->level;
+	buf[len + 2] = '>';
+	buf[len + 3] = ' ';
+	memcpy(&buf[len + 4], text, text_len);
+	buf[len + text_len + 4] = '\n';
+	record.size = len + text_len + 5;
+	record.type = PSTORE_TYPE_CONSOLE;
+	record.buf = buf;
+
+	psinfo->write(&record);
+}
+#endif
+
 /* insert record into the buffer, discard old ones, update heads */
 static int log_store(u32 caller_id, int facility, int level,
 		     enum log_flags flags, u64 ts_nsec,
@@ -659,6 +694,9 @@ static int log_store(u32 caller_id, int facility, int level,
 	msg->facility = facility;
 	msg->level = level & 7;
 	msg->flags = flags & 0x1f;
+#ifdef CONFIG_AMLOGIC_MODIFY
+	msg->cpu = smp_processor_id();
+#endif
 	if (ts_nsec > 0)
 		msg->ts_nsec = ts_nsec;
 	else
@@ -672,6 +710,11 @@ static int log_store(u32 caller_id, int facility, int level,
 	/* insert message */
 	log_next_idx += msg->len;
 	log_next_seq++;
+
+#ifdef CONFIG_AMLOGIC_DEBUG_FTRACE_PSTORE
+	if (console_enable)
+		record_buf(msg, text, text_len);
+#endif
 
 	return msg->text_len;
 }
@@ -1298,8 +1341,13 @@ static size_t print_time(u64 ts, char *buf)
 {
 	unsigned long rem_nsec = do_div(ts, 1000000000);
 
+#if defined(CONFIG_SMP) && defined(CONFIG_AMLOGIC_DRIVER)
+	return sprintf(buf, "[%5lu.%06lu@%d] ",
+		       (unsigned long)ts, rem_nsec / 1000, curr_cpu);
+#else
 	return sprintf(buf, "[%5lu.%06lu]",
 		       (unsigned long)ts, rem_nsec / 1000);
+#endif
 }
 
 #ifdef CONFIG_PRINTK_CALLER
@@ -1322,6 +1370,11 @@ static size_t print_prefix(const struct printk_log *msg, bool syslog,
 
 	if (syslog)
 		len = print_syslog((msg->facility << 3) | msg->level, buf);
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+	/* print_prefix() is under logbuf_lock protected */
+	curr_cpu = msg->cpu;
+#endif
 
 	if (time)
 		len += print_time(msg->ts_nsec, buf + len);
@@ -3147,6 +3200,23 @@ EXPORT_SYMBOL_GPL(kmsg_dump_unregister);
 static bool always_kmsg_dump;
 module_param_named(always_kmsg_dump, always_kmsg_dump, bool, S_IRUGO | S_IWUSR);
 
+const char *kmsg_dump_reason_str(enum kmsg_dump_reason reason)
+{
+	switch (reason) {
+	case KMSG_DUMP_PANIC:
+		return "Panic";
+	case KMSG_DUMP_OOPS:
+		return "Oops";
+	case KMSG_DUMP_EMERG:
+		return "Emergency";
+	case KMSG_DUMP_SHUTDOWN:
+		return "Shutdown";
+	default:
+		return "Unknown";
+	}
+}
+EXPORT_SYMBOL_GPL(kmsg_dump_reason_str);
+
 /**
  * kmsg_dump - dump kernel log to kernel message dumpers.
  * @reason: the reason (oops, panic etc) for dumping
@@ -3160,12 +3230,19 @@ void kmsg_dump(enum kmsg_dump_reason reason)
 	struct kmsg_dumper *dumper;
 	unsigned long flags;
 
-	if ((reason > KMSG_DUMP_OOPS) && !always_kmsg_dump)
-		return;
-
 	rcu_read_lock();
 	list_for_each_entry_rcu(dumper, &dump_list, list) {
-		if (dumper->max_reason && reason > dumper->max_reason)
+		enum kmsg_dump_reason max_reason = dumper->max_reason;
+
+		/*
+		 * If client has not provided a specific max_reason, default
+		 * to KMSG_DUMP_OOPS, unless always_kmsg_dump was set.
+		 */
+		if (max_reason == KMSG_DUMP_UNDEF) {
+			max_reason = always_kmsg_dump ? KMSG_DUMP_MAX :
+							KMSG_DUMP_OOPS;
+		}
+		if (reason > max_reason)
 			continue;
 
 		/* initialize iterator with data about the stored records */

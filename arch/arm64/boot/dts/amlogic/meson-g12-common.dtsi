@@ -13,43 +13,28 @@
 #include <dt-bindings/reset/amlogic,meson-axg-audio-arb.h>
 #include <dt-bindings/reset/amlogic,meson-g12a-audio-reset.h>
 #include <dt-bindings/reset/amlogic,meson-g12a-reset.h>
+#include <dt-bindings/pwm/pwm.h>
+#include <dt-bindings/pwm/meson.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/input/meson_ir.h>
+#include "meson-ir-map.dtsi"
+#include "mesong12a-bifrost.dtsi"
+#include <dt-bindings/reset/amlogic,meson-dos-reset.h>
 
 / {
 	interrupt-parent = <&gic>;
 	#address-cells = <2>;
 	#size-cells = <2>;
 
-	tdmif_a: audio-controller-0 {
-		compatible = "amlogic,axg-tdm-iface";
-		#sound-dai-cells = <0>;
-		sound-name-prefix = "TDM_A";
-		clocks = <&clkc_audio AUD_CLKID_MST_A_MCLK>,
-			 <&clkc_audio AUD_CLKID_MST_A_SCLK>,
-			 <&clkc_audio AUD_CLKID_MST_A_LRCLK>;
-		clock-names = "mclk", "sclk", "lrclk";
-		status = "disabled";
+	ion_dev {
+		compatible = "amlogic, ion_dev";
+		memory-region = <&ion_cma_reserved
+				&ion_fb_reserved>;
 	};
 
-	tdmif_b: audio-controller-1 {
-		compatible = "amlogic,axg-tdm-iface";
-		#sound-dai-cells = <0>;
-		sound-name-prefix = "TDM_B";
-		clocks = <&clkc_audio AUD_CLKID_MST_B_MCLK>,
-			 <&clkc_audio AUD_CLKID_MST_B_SCLK>,
-			 <&clkc_audio AUD_CLKID_MST_B_LRCLK>;
-		clock-names = "mclk", "sclk", "lrclk";
-		status = "disabled";
-	};
-
-	tdmif_c: audio-controller-2 {
-		compatible = "amlogic,axg-tdm-iface";
-		#sound-dai-cells = <0>;
-		sound-name-prefix = "TDM_C";
-		clocks = <&clkc_audio AUD_CLKID_MST_C_MCLK>,
-			 <&clkc_audio AUD_CLKID_MST_C_SCLK>,
-			 <&clkc_audio AUD_CLKID_MST_C_LRCLK>;
-		clock-names = "mclk", "sclk", "lrclk";
-		status = "disabled";
+	meson_uvm {
+		compatible = "amlogic, meson_uvm";
+		status = "okay";
 	};
 
 	efuse: efuse {
@@ -70,32 +55,47 @@
 		#size-cells = <2>;
 		ranges;
 
-		/* 3 MiB reserved for ARM Trusted Firmware (BL31) */
-		secmon_reserved: secmon@5000000 {
-			reg = <0x0 0x05000000 0x0 0x300000>;
-			no-map;
+		ramoops@0x07400000 {
+			compatible = "ramoops";
+			reg = <0x0 0x07400000 0x0 0x00100000>;
+			record-size = <0x20000>;
+			console-size = <0x40000>;
+			ftrace-size = <0x80000>;
+			pmsg-size = <0x20000>;
 		};
-
-		/* 32 MiB reserved for ARM Trusted Firmware (BL32) */
-		secmon_reserved_bl32: secmon@5300000 {
-			reg = <0x0 0x05300000 0x0 0x2000000>;
-			no-map;
-		};
-
 		linux,cma {
 			compatible = "shared-dma-pool";
 			reusable;
-			size = <0x0 0x10000000>;
+			size = <0x0 0x800000>;
 			alignment = <0x0 0x400000>;
 			linux,cma-default;
 		};
 	};
 
-	sm: secure-monitor {
-		compatible = "amlogic,meson-gxbb-sm";
+	secmon {
+		compatible = "amlogic, secmon";
+		memory-region = <&secmon_reserved>;
+		in_base_func = <0x82000020>;
+		out_base_func = <0x82000021>;
+		inout_size_func = <0x8200002a>;
+		reserve_mem_size = <0x00300000>;
+		clear_range = <0x05100000 0x1e00000>;
 	};
 
-	soc {
+	cpu_info {
+		compatible = "amlogic, cpuinfo";
+		status = "okay";
+		cpuinfo_cmd = <0x82000044>;
+	};
+
+	cma_shrinker: cma_shrinker {
+		compatible = "amlogic, cma-shrinker";
+		status = "okay";
+		adj  = <0 100 200 250 900 950>;
+		free = <8192 12288 16384 24576 28672 32768>;
+	};
+
+	soc: soc {
 		compatible = "simple-bus";
 		#address-cells = <2>;
 		#size-cells = <2>;
@@ -130,38 +130,6 @@
 			#address-cells = <2>;
 			#size-cells = <2>;
 			ranges = <0x0 0x0 0x0 0xff600000 0x0 0x200000>;
-
-			hdmi_tx: hdmi-tx@0 {
-				compatible = "amlogic,meson-g12a-dw-hdmi";
-				reg = <0x0 0x0 0x0 0x10000>;
-				interrupts = <GIC_SPI 57 IRQ_TYPE_EDGE_RISING>;
-				resets = <&reset RESET_HDMITX_CAPB3>,
-					 <&reset RESET_HDMITX_PHY>,
-					 <&reset RESET_HDMITX>;
-				reset-names = "hdmitx_apb", "hdmitx", "hdmitx_phy";
-				clocks = <&clkc CLKID_HDMI>,
-					 <&clkc CLKID_HTX_PCLK>,
-					 <&clkc CLKID_VPU_INTR>;
-				clock-names = "isfr", "iahb", "venci";
-				#address-cells = <1>;
-				#size-cells = <0>;
-				#sound-dai-cells = <0>;
-				status = "disabled";
-
-				/* VPU VENC Input */
-				hdmi_tx_venc_port: port@0 {
-					reg = <0>;
-
-					hdmi_tx_in: endpoint {
-						remote-endpoint = <&hdmi_tx_out>;
-					};
-				};
-
-				/* TMDS Output */
-				hdmi_tx_tmds_port: port@1 {
-					reg = <1>;
-				};
-			};
 
 			apb_efuse: bus@30000 {
 				compatible = "simple-bus";
@@ -265,6 +233,33 @@
 						};
 					};
 
+					all_nand_pins: all_nand_pins {
+						mux {
+							groups = "emmc_nand_d0",
+								"emmc_nand_d1",
+								"emmc_nand_d2",
+								"emmc_nand_d3",
+								"emmc_nand_d4",
+								"emmc_nand_d5",
+								"emmc_nand_d6",
+								"emmc_nand_d7",
+								"nand_ce0",
+								"nand_ale",
+								"nand_cle",
+								"nand_wen_clk",
+								"nand_ren_wr";
+							function = "nand";
+							input-enable;
+						};
+					};
+
+					nand_cs_pins: nand_cs {
+						mux {
+							groups = "nand_ce0";
+							function = "nand";
+						};
+					};
+
 					hdmitx_ddc_pins: hdmitx_ddc {
 						mux {
 							groups = "hdmitx_sda",
@@ -283,6 +278,13 @@
 						};
 					};
 
+					hdmitx_hpd_gpio: hdmitx_hpd_gpio {
+						mux {
+							groups = "GPIOH_1";
+							on = "gpio_periphs";
+							bias-disable;
+						};
+					};
 
 					i2c0_sda_c_pins: i2c0-sda-c {
 						mux {
@@ -1361,40 +1363,68 @@
 							bias-disable;
 						};
 					};
-				};
-			};
 
-			usb2_phy0: phy@36000 {
-				compatible = "amlogic,g12a-usb2-phy";
-				reg = <0x0 0x36000 0x0 0x2000>;
-				clocks = <&xtal>;
-				clock-names = "xtal";
-				resets = <&reset RESET_USB_PHY20>;
-				reset-names = "phy";
-				#phy-cells = <0>;
+					jtag_b_pins: jtag_b_pin {
+						mux {
+							groups = "jtag_b_tdi",
+								 "jtag_b_tdo",
+								 "jtag_b_clk",
+								 "jtag_b_tms";
+							function = "jtag_b";
+						};
+					};
+
+					spicc0_pins_x: spicc0_pins_x {
+						mux {
+							groups = "spi0_mosi_x",
+								 "spi0_miso_x",
+								 "spi0_clk_x";
+							function = "spi0";
+							drive-strength = <2>;
+						};
+					};
+
+					spicc0_pins_c: spicc0_pins_c {
+						mux {
+							groups = "spi0_mosi_c",
+								 "spi0_miso_c",
+								 "spi0_clk_c";
+							function = "spi0";
+							drive-strength = <2>;
+						};
+					};
+
+					spicc1_pins: spicc1_pins {
+						mux {
+							groups = "spi1_mosi",
+								 "spi1_miso",
+								 "spi1_clk";
+							function = "spi1";
+							drive-strength = <2>;
+						};
+					};
+				};
 			};
 
 			dmc: bus@38000 {
 				compatible = "simple-bus";
-				reg = <0x0 0x38000 0x0 0x400>;
+				reg = <0x0 0x38000 0x0 0xd00>;
 				#address-cells = <2>;
 				#size-cells = <2>;
-				ranges = <0x0 0x0 0x0 0x38000 0x0 0x400>;
+				ranges = <0x0 0x0 0x0 0x38000 0x0 0xd00>;
 
-				canvas: video-lut@48 {
-					compatible = "amlogic,canvas";
+				canvas: video-lut@00 {
+					compatible = "amlogic, meson, canvas";
 					reg = <0x0 0x48 0x0 0x14>;
 				};
-			};
 
-			usb2_phy1: phy@3a000 {
-				compatible = "amlogic,g12a-usb2-phy";
-				reg = <0x0 0x3a000 0x0 0x2000>;
-				clocks = <&xtal>;
-				clock-names = "xtal";
-				resets = <&reset RESET_USB_PHY21>;
-				reset-names = "phy";
-				#phy-cells = <0>;
+				ddr_bandwidth: bandwidth@00 {
+					compatible = "amlogic,ddr-bandwidth-g12a";
+					reg = <0x0 0x0 0x0 0x100
+						0x0 0xc00 0x0 0x100>;
+					interrupts = <GIC_SPI 52 IRQ_TYPE_EDGE_RISING>;
+					interrupt-names = "ddr_bandwidth";
+				};
 			};
 
 			hiu: bus@3c000 {
@@ -1410,57 +1440,10 @@
 					reg = <0 0 0 0x400>;
 
 					clkc: clock-controller {
-						compatible = "amlogic,g12a-clkc";
+						compatible = "amlogic,sm1-clkc";
 						#clock-cells = <1>;
 						clocks = <&xtal>;
 						clock-names = "xtal";
-					};
-
-					pwrc: power-controller {
-						compatible = "amlogic,meson-g12a-pwrc";
-						#power-domain-cells = <1>;
-						amlogic,ao-sysctrl = <&rti>;
-						resets = <&reset RESET_VIU>,
-							 <&reset RESET_VENC>,
-							 <&reset RESET_VCBUS>,
-							 <&reset RESET_BT656>,
-							 <&reset RESET_RDMA>,
-							 <&reset RESET_VENCI>,
-							 <&reset RESET_VENCP>,
-							 <&reset RESET_VDAC>,
-							 <&reset RESET_VDI6>,
-							 <&reset RESET_VENCL>,
-							 <&reset RESET_VID_LOCK>;
-						reset-names = "viu", "venc", "vcbus", "bt656",
-							      "rdma", "venci", "vencp", "vdac",
-							      "vdi6", "vencl", "vid_lock";
-						clocks = <&clkc CLKID_VPU>,
-							 <&clkc CLKID_VAPB>;
-						clock-names = "vpu", "vapb";
-						/*
-						 * VPU clocking is provided by two identical clock paths
-						 * VPU_0 and VPU_1 muxed to a single clock by a glitch
-						 * free mux to safely change frequency while running.
-						 * Same for VAPB but with a final gate after the glitch free mux.
-						 */
-						assigned-clocks = <&clkc CLKID_VPU_0_SEL>,
-								  <&clkc CLKID_VPU_0>,
-								  <&clkc CLKID_VPU>, /* Glitch free mux */
-								  <&clkc CLKID_VAPB_0_SEL>,
-								  <&clkc CLKID_VAPB_0>,
-								  <&clkc CLKID_VAPB_SEL>; /* Glitch free mux */
-						assigned-clock-parents = <&clkc CLKID_FCLK_DIV3>,
-									 <0>, /* Do Nothing */
-									 <&clkc CLKID_VPU_0>,
-									 <&clkc CLKID_FCLK_DIV4>,
-									 <0>, /* Do Nothing */
-									 <&clkc CLKID_VAPB_0>;
-						assigned-clock-rates = <0>, /* Do Nothing */
-								       <666666666>,
-								       <0>, /* Do Nothing */
-								       <0>, /* Do Nothing */
-								       <250000000>,
-								       <0>; /* Do Nothing */
 					};
 				};
 			};
@@ -1749,18 +1732,6 @@
 				};
 			};
 
-			usb3_pcie_phy: phy@46000 {
-				compatible = "amlogic,g12a-usb3-pcie-phy";
-				reg = <0x0 0x46000 0x0 0x2000>;
-				clocks = <&clkc CLKID_PCIE_PLL>;
-				clock-names = "ref_clk";
-				resets = <&reset RESET_PCIE_PHY>;
-				reset-names = "phy";
-				assigned-clocks = <&clkc CLKID_PCIE_PLL>;
-				assigned-clock-rates = <100000000>;
-				#phy-cells = <1>;
-			};
-
 			eth_phy: mdio-multiplexer@4c000 {
 				compatible = "amlogic,g12a-mdio-mux";
 				reg = <0x0 0x4c000 0x0 0xa4>;
@@ -1791,6 +1762,201 @@
 						max-speed = <100>;
 					};
 				};
+			};
+		};
+
+		pwrc: power-controller {
+			compatible = "amlogic,meson-g12a-pwrc";
+			reg = <0x0 0xff62fcc0 0x0 0x40>;
+			reg-names = "dos";
+			#power-domain-cells = <1>;
+			amlogic,ao-sysctrl = <&rti>;
+			amlogic,hhi-sysctrl = <&hhi>;
+			vpu,reset = <&vpu_pd_rst>;
+			nna,reset = <&nn_pd_rst>;
+			usb,reset = <&usb_pd_rst>;
+			pcie,reset = <&pcie_pd_rst>;
+			ge2d,reset = <&ge2d_pd_rst>;
+			vdec,reset = <&vdec_pd_rst>;
+			hcodec,reset = <&hcodec_pd_rst>;
+			hevc,reset = <&hevc_pd_rst>;
+			wave420l,reset = <&wave420l_pd_rst>;
+			clocks = <&clkc CLKID_VPU>,
+				 <&clkc CLKID_VAPB>;
+			clock-names = "vpu", "vapb";
+			/*
+			 * VPU clocking is provided by two identical clock paths
+			 * VPU_0 and VPU_1 muxed to a single clock by a glitch
+			 * free mux to safely change frequency while running.
+			 * Same for VAPB but with a final gate after the glitch free mux.
+			 */
+			assigned-clocks = <&clkc CLKID_VPU_0_SEL>,
+					  <&clkc CLKID_VPU_0>,
+					  <&clkc CLKID_VPU>, /* Glitch free mux */
+					  <&clkc CLKID_VAPB_0_SEL>,
+					  <&clkc CLKID_VAPB_0>,
+					  <&clkc CLKID_VAPB_SEL>; /* Glitch free mux */
+			assigned-clock-parents = <&clkc CLKID_FCLK_DIV3>,
+						 <0>, /* Do Nothing */
+						 <&clkc CLKID_VPU_0>,
+						 <&clkc CLKID_FCLK_DIV4>,
+						 <0>, /* Do Nothing */
+						 <&clkc CLKID_VAPB_0>;
+			assigned-clock-rates = <0>, /* Do Nothing */
+						   <666666666>,
+						   <0>, /* Do Nothing */
+						   <0>, /* Do Nothing */
+						   <250000000>,
+						   <0>; /* Do Nothing */
+		};
+
+		vpu_pd_rst: vpu_rst {
+			resets = <&reset RESET_VIU>,
+				 <&reset RESET_VENC>,
+				 <&reset RESET_VCBUS>,
+				 <&reset RESET_BT656>,
+				 <&reset RESET_RDMA>,
+				 <&reset RESET_VENCI>,
+				 <&reset RESET_VENCP>,
+				 <&reset RESET_VDAC>,
+				 <&reset RESET_VDI6>,
+				 <&reset RESET_VENCL>,
+				 <&reset RESET_VID_LOCK>;
+			reset-names = "viu", "venc", "vcbus", "bt656",
+				"rdma", "venci", "vencp", "vdac",
+				"vdi6", "vencl", "vid_lock";
+		};
+
+		nn_pd_rst: nn_rst {
+			resets = <&reset RESET_NN_PIPELINE0>,
+				<&reset RESET_NN>,
+				<&reset RESET_NN_PIPELINE1>;
+			reset-names = "nn_pipeline0", "nn",
+				"nn_pipeline1";
+		};
+
+		usb_pd_rst: usb_rst {
+			resets = <&reset RESET_USB>;
+			reset-names = "usb";
+		};
+
+		pcie_pd_rst: pcie_rst {
+			resets = <&reset RESET_PCIE_CTRL_A>,
+				<&reset RESET_PCIE_PHY>,
+				<&reset RESET_PCIE_APB>;
+			reset-names = "pcie_ctrl_a", "pcie_phy",
+				"pcie_apb";
+		};
+
+		ge2d_pd_rst: ge2d_rst {
+			resets = <&reset RESET_GE2D>;
+			reset-names = "ge2d";
+		};
+
+		vdec_pd_rst: vdec_rst {
+			resets = <&codec_dos_reset RESET0_VDEC1_MDEC_CBUS>,
+				<&codec_dos_reset RESET0_VDEC1_MDEC_VLD0>,
+				<&codec_dos_reset RESET0_VDEC1_MDEC_VLD1>,
+				<&codec_dos_reset RESET0_VDEC1_MDEC_VLD2>,
+				<&codec_dos_reset RESET0_VDEC1_MDEC_IQIDCT>,
+				<&codec_dos_reset RESET0_VDEC1_MDEC_MC>,
+				<&codec_dos_reset RESET0_VDEC1_MDEC_DBLK>,
+				<&codec_dos_reset RESET0_VDEC1_MDEC_PIC_DC>,
+				<&codec_dos_reset RESET0_VDEC1_MDEC_PSCALE>,
+				<&codec_dos_reset RESET0_VDEC1_VCPU_MCPU>,
+				<&codec_dos_reset RESET0_VDEC1_VCPU_CCPU>,
+				<&codec_dos_reset RESET0_VDEC1_MMC_PRE_ARB>,
+				<&codec_dos_reset 14>;
+			reset-names = "vdec_cbus", "vdec_vld0","vdec_vld1",
+				"vdec_vld2", "vdec_iqidct", "vdec_mc",
+				"vdec_dblk", "vdec_dc", "vdec_pscale",
+				"vdec_mcpu", "vdec_ccpu", "vdec_bit14";
+		};
+
+		hcodec_pd_rst: hcodec_rst {
+			resets = <&codec_dos_reset RESET1_HCODEC_HDEC_CBUS>,
+				<&codec_dos_reset RESET1_HCODEC_HDEC_VLD0>,
+				<&codec_dos_reset RESET1_HCODEC_HDEC_VLD1>,
+				<&codec_dos_reset RESET1_HCODEC_HDEC_VLD2>,
+				<&codec_dos_reset RESET1_HCODEC_HDEC_IQIDCT>,
+				<&codec_dos_reset RESET1_HCODEC_HDEC_MC>,
+				<&codec_dos_reset RESET1_HCODEC_HDEC_DBLK>,
+				<&codec_dos_reset RESET1_HCODEC_HDEC_PIC_DC>,
+				<&codec_dos_reset RESET1_HCODEC_HDEC_PSCALE>,
+				<&codec_dos_reset RESET1_HCODEC_VCPU_MCPU>,
+				<&codec_dos_reset RESET1_HCODEC_VCPU_CCPU>,
+				<&codec_dos_reset RESET1_HCODEC_MMC_PRE_ARB>,
+				<&codec_dos_reset RESET1_HCODEC_RESERVED2>,
+				<&codec_dos_reset RESET1_HCODEC_RESERVED3>,
+				<&codec_dos_reset RESET1_HCODEC_HENC_VLC>,
+				<&codec_dos_reset 49>;
+			reset-names = "hcodec_cbus", "hcodec_vld0",
+				"hcodec_vld1", "hcodec_vld2", "hcodec_iqidc",
+				"hcodec_mc", "hcodec_dblk", "hcodec_dc",
+				"hcodec_pscale", "hcodec_mcpu", "hcodec_ccpu",
+				"hcodec_prearb", "hcodec_res2", "hcodec_res3",
+				"hcodec_vlc", "hcodec_bit17";
+		};
+
+		hevc_pd_rst: hevc_rst {
+			resets = <&codec_dos_reset RESET3_BIT2>,
+				<&codec_dos_reset RESET3_BIT3>,
+				<&codec_dos_reset RESET3_BIT4>,
+				<&codec_dos_reset RESET3_BIT5>,
+				<&codec_dos_reset RESET3_BIT6>,
+				<&codec_dos_reset RESET3_BIT7>,
+				<&codec_dos_reset RESET3_BIT8>,
+				<&codec_dos_reset RESET3_BIT9>,
+				<&codec_dos_reset RESET3_BIT10>,
+				<&codec_dos_reset RESET3_BIT11>,
+				<&codec_dos_reset RESET3_BIT12>,
+				<&codec_dos_reset RESET3_BIT13>,
+				<&codec_dos_reset RESET3_BIT14>,
+				<&codec_dos_reset RESET3_BIT15>,
+				<&codec_dos_reset RESET3_BIT16>,
+				<&codec_dos_reset RESET3_BIT17>,
+				<&codec_dos_reset RESET3_BIT18>,
+				<&codec_dos_reset RESET3_BIT19>,
+				<&codec_dos_reset RESET3_BIT24>;
+			reset-names = "hevc_bit2", "hevc_bit3", "hevc_bit4",
+				"hevc_bit5","hevc_bit6", "hevc_bit7",
+				"hevc_bit8", "hevc_bit9", "hevc_bit10",
+				"hevc_bit11", "hevc_bit12", "hevc_bit13",
+				"hevc_bit14", "hevc_bit15", "hevc_bit16",
+				"hevc_bit17", "hevc_bit18", "hevc_bit19",
+				"hevc_bit24";
+		};
+
+		wave420l_pd_rst: wave420l_rst {
+			resets = <&codec_dos_reset RESET4_BIT8>,
+				<&codec_dos_reset RESET4_BIT9>,
+				<&codec_dos_reset RESET4_BIT10>,
+				<&codec_dos_reset RESET4_BIT11>;
+			reset-names = "wave_bit8", "wave_bit9", "wave_bit10",
+				"wave_bit11";
+		};
+
+		aml_dma: aml_dma@ff63e000 {
+			compatible = "amlogic,aml_txlx_dma";
+			reg = <0x0 0xff63e000 0x0 0x48>;
+			interrupts = <GIC_SPI 180 IRQ_TYPE_EDGE_RISING>;
+
+			aml_aes {
+				compatible = "amlogic,aes_g12a_dma";
+				dev_name = "aml_aes_dma";
+				status = "okay";
+			};
+
+			aml_sha {
+				compatible = "amlogic,sha_dma";
+				dev_name = "aml_sha_dma";
+				status = "okay";
+			};
+
+			aml_tdes {
+				compatible = "amlogic,tdes_dma";
+				dev_name = "aml_tdes_dma";
+				status = "okay";
 			};
 		};
 
@@ -1992,6 +2158,33 @@
 						};
 					};
 
+					uart_ao_b_pins0: uart-ao_b0 {
+						mux {
+							groups = "uart_ao_b_tx_2",
+								 "uart_ao_b_rx_3";
+							function = "uart_ao_b";
+							bias-disable;
+						};
+					};
+
+					uart_ao_b_pins1: uart-ao_b1 {
+						mux {
+							groups = "uart_ao_b_tx_8",
+								 "uart_ao_b_rx_9";
+							function = "uart_ao_b";
+							bias-disable;
+						};
+					};
+
+					uart_ao_b_cts_rts_pins: uart-ao-b-cts-rts {
+						mux {
+							groups = "uart_ao_b_cts",
+								 "uart_ao_b_rts";
+							function = "uart_ao_b";
+							bias-disable;
+						};
+					};
+
 					pwm_a_e_pins: pwm-a-e {
 						mux {
 							groups = "pwm_a_e";
@@ -2062,14 +2255,25 @@
 							bias-disable;
 						};
 					};
+
+					jtag_a_pins: jtag_a_pin {
+						mux {
+							groups = "jtag_a_tdi",
+								 "jtag_a_tdo",
+								 "jtag_a_clk",
+								 "jtag_a_tms";
+							function = "jtag_a";
+						};
+					};
 				};
 			};
 
 			vrtc: rtc@0a8 {
 				compatible = "amlogic,meson-vrtc";
 				reg = <0x0 0x000a8 0x0 0x4>;
+				status = "okay";
 			};
-
+/*
 			cec_AO: cec@100 {
 				compatible = "amlogic,meson-gx-ao-cec";
 				reg = <0x0 0x00100 0x0 0x14>;
@@ -2078,6 +2282,7 @@
 				clock-names = "core";
 				status = "disabled";
 			};
+*/
 
 			sec_AO: ao-secure@140 {
 				compatible = "amlogic,meson-gx-ao-secure", "syscon";
@@ -2085,6 +2290,7 @@
 				amlogic,has-chip-id;
 			};
 
+/*
 			cecb_AO: cec@280 {
 				compatible = "amlogic,meson-g12a-ao-cec";
 				reg = <0x0 0x00280 0x0 0x1c>;
@@ -2093,36 +2299,45 @@
 				clock-names = "oscin";
 				status = "disabled";
 			};
-
+*/
 			pwm_AO_cd: pwm@2000 {
 				compatible = "amlogic,meson-g12a-ao-pwm-cd";
 				reg = <0x0 0x2000 0x0 0x20>;
 				#pwm-cells = <3>;
+				clocks = <&xtal>,
+					 <&xtal>,
+					 <&xtal>,
+					 <&xtal>;
+				clock-names = "clkin0",
+					      "clkin1",
+					      "clkin2",
+					      "clkin3";
 				status = "disabled";
 			};
 
 			uart_AO: serial@3000 {
-				compatible = "amlogic,meson-gx-uart",
-					     "amlogic,meson-ao-uart";
+				compatible = "amlogic,meson-uart";
 				reg = <0x0 0x3000 0x0 0x18>;
 				interrupts = <GIC_SPI 193 IRQ_TYPE_EDGE_RISING>;
-				clocks = <&xtal>, <&clkc_AO CLKID_AO_UART>, <&xtal>;
-				clock-names = "xtal", "pclk", "baud";
+				clocks = <&xtal>, <&clkc_AO CLKID_AO_UART>;
+				clock-names = "clk_uart", "clk_gate";
+				fifosize = <64>;
+				xtal_tick_en = <2>;
 				status = "disabled";
 			};
 
 			uart_AO_B: serial@4000 {
-				compatible = "amlogic,meson-gx-uart",
-					     "amlogic,meson-ao-uart";
+				compatible = "amlogic,meson-uart";
 				reg = <0x0 0x4000 0x0 0x18>;
 				interrupts = <GIC_SPI 197 IRQ_TYPE_EDGE_RISING>;
-				clocks = <&xtal>, <&clkc_AO CLKID_AO_UART2>, <&xtal>;
-				clock-names = "xtal", "pclk", "baud";
+				clocks = <&xtal>, <&clkc_AO CLKID_AO_UART2>;
+				clock-names = "clk_uart", "clk_gate";
+				fifosize = <64>;
 				status = "disabled";
 			};
 
 			i2c_AO: i2c@5000 {
-				compatible = "amlogic,meson-axg-i2c";
+				compatible = "amlogic,meson-i2c";
 				status = "disabled";
 				reg = <0x0 0x05000 0x0 0x20>;
 				interrupts = <GIC_SPI 195 IRQ_TYPE_EDGE_RISING>;
@@ -2135,14 +2350,26 @@
 				compatible = "amlogic,meson-g12a-ao-pwm-ab";
 				reg = <0x0 0x7000 0x0 0x20>;
 				#pwm-cells = <3>;
+				clocks = <&xtal>,
+					 <&xtal>,
+					 <&xtal>,
+					 <&xtal>;
+				clock-names = "clkin0",
+					      "clkin1",
+					      "clkin2",
+					      "clkin3";
 				status = "disabled";
 			};
 
 			ir: ir@8000 {
-				compatible = "amlogic,meson-gxbb-ir";
-				reg = <0x0 0x8000 0x0 0x20>;
+				compatible = "amlogic, meson-ir";
+				reg = <0x0 0x8040 0x0 0xA4>,
+				      <0x0 0x8000 0x0 0x20>;
+				status = "disable";
+				protocol = <REMOTE_TYPE_NEC>;
 				interrupts = <GIC_SPI 196 IRQ_TYPE_EDGE_RISING>;
-				status = "disabled";
+				map = <&custom_maps>;
+				max_frame_time = <200>;
 			};
 
 			saradc: adc@9000 {
@@ -2159,7 +2386,7 @@
 				status = "disabled";
 			};
 		};
-
+#if 0
 		vpu: vpu@ff900000 {
 			compatible = "amlogic,meson-g12a-vpu";
 			reg = <0x0 0xff900000 0x0 0x100000>,
@@ -2183,6 +2410,19 @@
 					remote-endpoint = <&hdmi_tx_in>;
 				};
 			};
+		};
+#endif
+
+		arm_pmu {
+			compatible = "arm,armv8-pmuv3";
+			/* clusterb-enabled; */
+			interrupts = <GIC_SPI 137 IRQ_TYPE_LEVEL_HIGH>;
+			reg = <0 0xff634680 0 0x4>;
+			cpumasks = <0xf>;
+			/* default 10ms */
+			relax-timer-ns = <10000000>;
+			/* default 10000us */
+			max-wait-cnt = <10000>;
 		};
 
 		gic: interrupt-controller@ffc01000 {
@@ -2224,6 +2464,14 @@
 				compatible = "amlogic,meson-g12a-ee-pwm";
 				reg = <0x0 0x19000 0x0 0x20>;
 				#pwm-cells = <3>;
+				clocks = <&xtal>,
+					 <&xtal>,
+					 <&xtal>,
+					 <&xtal>;
+				clock-names = "clkin0",
+					      "clkin1",
+					      "clkin2",
+					      "clkin3";
 				status = "disabled";
 			};
 
@@ -2231,6 +2479,14 @@
 				compatible = "amlogic,meson-g12a-ee-pwm";
 				reg = <0x0 0x1a000 0x0 0x20>;
 				#pwm-cells = <3>;
+				clocks = <&xtal>,
+					 <&xtal>,
+					 <&xtal>,
+					 <&xtal>;
+				clock-names = "clkin0",
+					      "clkin1",
+					      "clkin2",
+					      "clkin3";
 				status = "disabled";
 			};
 
@@ -2238,11 +2494,19 @@
 				compatible = "amlogic,meson-g12a-ee-pwm";
 				reg = <0x0 0x1b000 0x0 0x20>;
 				#pwm-cells = <3>;
+				clocks = <&xtal>,
+					 <&xtal>,
+					 <&xtal>,
+					 <&xtal>;
+				clock-names = "clkin0",
+					      "clkin1",
+					      "clkin2",
+					      "clkin3";
 				status = "disabled";
 			};
 
 			i2c3: i2c@1c000 {
-				compatible = "amlogic,meson-axg-i2c";
+				compatible = "amlogic,meson-i2c";
 				status = "disabled";
 				reg = <0x0 0x1c000 0x0 0x20>;
 				interrupts = <GIC_SPI 39 IRQ_TYPE_EDGE_RISING>;
@@ -2252,7 +2516,7 @@
 			};
 
 			i2c2: i2c@1d000 {
-				compatible = "amlogic,meson-axg-i2c";
+				compatible = "amlogic,meson-i2c";
 				status = "disabled";
 				reg = <0x0 0x1d000 0x0 0x20>;
 				interrupts = <GIC_SPI 215 IRQ_TYPE_EDGE_RISING>;
@@ -2262,7 +2526,7 @@
 			};
 
 			i2c1: i2c@1e000 {
-				compatible = "amlogic,meson-axg-i2c";
+				compatible = "amlogic,meson-i2c";
 				status = "disabled";
 				reg = <0x0 0x1e000 0x0 0x20>;
 				interrupts = <GIC_SPI 214 IRQ_TYPE_EDGE_RISING>;
@@ -2272,7 +2536,7 @@
 			};
 
 			i2c0: i2c@1f000 {
-				compatible = "amlogic,meson-axg-i2c";
+				compatible = "amlogic,meson-i2c";
 				status = "disabled";
 				reg = <0x0 0x1f000 0x0 0x20>;
 				interrupts = <GIC_SPI 21 IRQ_TYPE_EDGE_RISING>;
@@ -2281,116 +2545,296 @@
 				clocks = <&clkc CLKID_I2C>;
 			};
 
+			spicc0: spi@13000 {
+				compatible = "amlogic,meson-g12-spicc";
+				reg = <0x0 0x13000 0x0 0x44>;
+				interrupts = <GIC_SPI 81 IRQ_TYPE_LEVEL_HIGH>;
+				clock-names = "core", "async";
+				clocks = <&clkc CLKID_SPICC0>,
+					 <&clkc CLKID_SPICC0_GATE>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+				status = "disabled";
+			};
+
+			spicc1: spi@15000 {
+				compatible = "amlogic,meson-g12-spicc";
+				reg = <0x0 0x15000 0x0 0x44>;
+				interrupts = <GIC_SPI 90 IRQ_TYPE_LEVEL_HIGH>;
+				clock-names = "core", "async";
+				clocks = <&clkc CLKID_SPICC1>,
+					 <&clkc CLKID_SPICC1_GATE>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+				status = "disabled";
+			};
+
 			clk_msr: clock-measure@18000 {
 				compatible = "amlogic,meson-g12a-clk-measure";
 				reg = <0x0 0x18000 0x0 0x10>;
 			};
 
 			uart_C: serial@22000 {
-				compatible = "amlogic,meson-gx-uart";
+				compatible = "amlogic,meson-uart";
 				reg = <0x0 0x22000 0x0 0x18>;
 				interrupts = <GIC_SPI 93 IRQ_TYPE_EDGE_RISING>;
-				clocks = <&xtal>, <&clkc CLKID_UART2>, <&xtal>;
-				clock-names = "xtal", "pclk", "baud";
+				clocks = <&xtal>, <&clkc CLKID_UART2>;
+				clock-names = "clk_uart", "clk_gate";
+				fifosize = <64>;
 				status = "disabled";
 			};
 
 			uart_B: serial@23000 {
-				compatible = "amlogic,meson-gx-uart";
+				compatible = "amlogic,meson-uart";
 				reg = <0x0 0x23000 0x0 0x18>;
 				interrupts = <GIC_SPI 75 IRQ_TYPE_EDGE_RISING>;
-				clocks = <&xtal>, <&clkc CLKID_UART1>, <&xtal>;
-				clock-names = "xtal", "pclk", "baud";
+				clocks = <&xtal>, <&clkc CLKID_UART1>;
+				clock-names = "clk_uart", "clk_gate";
+				fifosize = <64>;
 				status = "disabled";
 			};
 
 			uart_A: serial@24000 {
-				compatible = "amlogic,meson-gx-uart";
+				compatible = "amlogic,meson-uart";
 				reg = <0x0 0x24000 0x0 0x18>;
 				interrupts = <GIC_SPI 26 IRQ_TYPE_EDGE_RISING>;
-				clocks = <&xtal>, <&clkc CLKID_UART0>, <&xtal>;
-				clock-names = "xtal", "pclk", "baud";
+				clocks = <&xtal>, <&clkc CLKID_UART0>;
+				clock-names = "clk_uart", "clk_gate";
+				fifosize = <128>;
 				status = "disabled";
+			};
+
+			watchdog@0xf0d0 {
+				compatible = "amlogic,meson-gxbb-wdt";
+				status = "okay";
+				/* 0:userspace, 1:kernel */
+				amlogic,feed_watchdog_mode = <1>;
+				reg = <0x0 0xf0d0 0x0 0x10>;
+				clocks = <&xtal>;
+			};
+
+			timer_bc: timer_F@f190{
+				compatible = "amlogic,bc-timer";
+				reg= <0x0 0xf190 0x0 0x8>;
+				timer_name = "Meson TimerF";
+				clockevent-rating=<300>;
+				clockevent-shift=<20>;
+				clockevent-features=<0x23>;
+				interrupts = <GIC_SPI 60 IRQ_TYPE_EDGE_RISING>;
+				bit_enable=<16>;
+				bit_mode=<12>;
+				bit_resolution=<0>;
 			};
 		};
 
 		sd_emmc_a: sd@ffe03000 {
 			compatible = "amlogic,meson-axg-mmc";
-			reg = <0x0 0xffe03000 0x0 0x800>;
-			interrupts = <GIC_SPI 189 IRQ_TYPE_EDGE_RISING>;
+			reg = <0x0 0xffe03000 0x0 0x800>,
+				<0x0 0xff63c264 0x0 0x4>,
+				<0x0 0xff6346cc 0x0 0x4>;
+			interrupts = <GIC_SPI 189 IRQ_TYPE_LEVEL_HIGH>;
 			status = "disabled";
 			clocks = <&clkc CLKID_SD_EMMC_A>,
+				<&clkc CLKID_SD_EMMC_A_CLK0_SEL>,
 				 <&clkc CLKID_SD_EMMC_A_CLK0>,
+				 <&xtal>,
 				 <&clkc CLKID_FCLK_DIV2>;
-			clock-names = "core", "clkin0", "clkin1";
+			clock-names = "core", "mux0", "mux1",
+					"clkin0", "clkin1";
+			card_type = <3>;
+			mmc_debug_flag;
+			cap-sdio-irq;
+			keep-power-in-suspend;
 			resets = <&reset RESET_SD_EMMC_A>;
 		};
 
 		sd_emmc_b: sd@ffe05000 {
 			compatible = "amlogic,meson-axg-mmc";
-			reg = <0x0 0xffe05000 0x0 0x800>;
+			reg = <0x0 0xffe05000 0x0 0x800>,
+				<0x0 0xff63c264 0x0 0x4>,
+				<0x0 0xff6346e4 0x0 0x4>;
 			interrupts = <GIC_SPI 190 IRQ_TYPE_EDGE_RISING>;
 			status = "disabled";
 			clocks = <&clkc CLKID_SD_EMMC_B>,
+				<&clkc CLKID_SD_EMMC_B_CLK0_SEL>,
 				 <&clkc CLKID_SD_EMMC_B_CLK0>,
+				 <&xtal>,
 				 <&clkc CLKID_FCLK_DIV2>;
-			clock-names = "core", "clkin0", "clkin1";
+			clock-names = "core", "mux0", "mux1",
+					"clkin0", "clkin1";
+			card_type = <5>;
+			mmc_debug_flag;
 			resets = <&reset RESET_SD_EMMC_B>;
 		};
 
 		sd_emmc_c: mmc@ffe07000 {
 			compatible = "amlogic,meson-axg-mmc";
-			reg = <0x0 0xffe07000 0x0 0x800>;
+			reg = <0x0 0xffe07000 0x0 0x800>,
+				<0x0 0xff63c25c 0x0 0x4>,
+				<0x0 0xff6346c0 0x0 0x4>;
 			interrupts = <GIC_SPI 191 IRQ_TYPE_EDGE_RISING>;
 			status = "disabled";
 			clocks = <&clkc CLKID_SD_EMMC_C>,
+				<&clkc CLKID_SD_EMMC_C_CLK0_SEL>,
 				 <&clkc CLKID_SD_EMMC_C_CLK0>,
-				 <&clkc CLKID_FCLK_DIV2>;
-			clock-names = "core", "clkin0", "clkin1";
+				 <&xtal>,
+				 <&clkc CLKID_FCLK_DIV2>,
+				 <&clkc CLKID_FCLK_DIV2P5>;
+			clock-names = "core", "mux0", "mux1",
+					"clkin0", "clkin1", "clkin2";
+			card_type = <1>;
+			mmc_debug_flag;
 			resets = <&reset RESET_SD_EMMC_C>;
 		};
 
-		usb: usb@ffe09000 {
+		mtd_nand: nfc@ffe07800 {
+			compatible = "amlogic,meson-nfc-full-ecc";
 			status = "disabled";
-			compatible = "amlogic,meson-g12a-usb-ctrl";
-			reg = <0x0 0xffe09000 0x0 0xa0>;
+			reg = <0x0 0xFFE07800 0x0 0x200>;
+			interrupts = <GIC_SPI 34 IRQ_TYPE_EDGE_RISING>;
+
+			clocks = <&clkc CLKID_SD_EMMC_C>,
+					 <&clkc CLKID_FCLK_DIV2>;
+			clock-names = "gate", "fdiv2pll";
+			nand_clk_ctrl = <0xFFE07000>;
+		};
+
+		usb2_phy_v2: usb2phy@ffe09000 {
+			compatible = "amlogic,amlogic-new-usb2-v2";
+			status = "disable";
+			#phy-cells = <0>;
+			reg = <0x0 0xffe09000 0x0 0x80
+				0x0 0xffd01008 0x0 0x100
+				0x0 0xff636000 0x0 0x2000
+				0x0 0xff63a000 0x0 0x2000>;
+			pll-setting-1 = <0x09400414>;
+			pll-setting-2 = <0x927E0000>;
+			pll-setting-3 = <0xac5f69e5>;
+			pll-setting-4 = <0xfe18>;
+			pll-setting-5 = <0x8000fff>;
+			pll-setting-6 = <0x78000>;
+			pll-setting-7 = <0xe0004>;
+			pll-setting-8 = <0xe000c>;
+			version = <2>;
+			phy20-reset-level-bit = <16>;
+			phy21-reset-level-bit = <17>;
+			usb-reset-bit = <2>;
+		};
+
+		usb3_phy_v2: usb3phy@ffe09080 {
+			compatible = "amlogic,amlogic-new-usb3-v2";
+			status = "disable";
+			clocks = <&clkc CLKID_PCIE_PLL>;
+			clock-names = "pcie_refpll";
+			#phy-cells = <0>;
+			reg = <0x0 0xffe09080 0x0 0x20
+					0x0 0xffd01008 0x0 0x100>;
+			phy-reg = <0xff646000>;
+			phy-reg-size = <0x2000>;
+			usb2-phy-reg = <0xffe09000>;
+			usb2-phy-reg-size = <0x80>;
 			interrupts = <GIC_SPI 16 IRQ_TYPE_LEVEL_HIGH>;
+		};
+
+		usb0: usb@ff500000 {
+			compatible = "amlogic,meson-g12a-dwc3";
+			status = "disable";
 			#address-cells = <2>;
 			#size-cells = <2>;
 			ranges;
 
 			clocks = <&clkc CLKID_USB>;
-			resets = <&reset RESET_USB>;
+			clock-names = "usb_general";
 
-			dr_mode = "otg";
-
-			phys = <&usb2_phy0>, <&usb2_phy1>,
-			       <&usb3_pcie_phy PHY_TYPE_USB3>;
-			phy-names = "usb2-phy0", "usb2-phy1", "usb3-phy0";
-
-			dwc2: usb@ff400000 {
-				compatible = "amlogic,meson-g12a-usb", "snps,dwc2";
-				reg = <0x0 0xff400000 0x0 0x40000>;
-				interrupts = <GIC_SPI 31 IRQ_TYPE_LEVEL_HIGH>;
-				clocks = <&clkc CLKID_USB1_DDR_BRIDGE>;
-				clock-names = "otg";
-				phys = <&usb2_phy1>;
-				phy-names = "usb2-phy";
-				dr_mode = "peripheral";
-				g-rx-fifo-size = <192>;
-				g-np-tx-fifo-size = <128>;
-				g-tx-fifo-size = <128 128 16 16 16>;
-			};
-
-			dwc3: usb@ff500000 {
+			dwc3: dwc3@ff500000 {
 				compatible = "snps,dwc3";
 				reg = <0x0 0xff500000 0x0 0x100000>;
 				interrupts = <GIC_SPI 30 IRQ_TYPE_LEVEL_HIGH>;
 				dr_mode = "host";
+				maximum-speed = "high-speed";
 				snps,dis_u2_susphy_quirk;
-				snps,quirk-frame-length-adjustment = <0x20>;
-				snps,parkmode-disable-ss-quirk;
+				snps,quirk-frame-length-adjustment;
+				usb-phy = <&usb2_phy_v2>, <&usb3_phy_v2>;
+				clocks = <&clkc CLKID_USB>;
+				clock-names = "usb_general";
+				usb5v-supply = <&ao_5v>;
+				usb3v3-supply = <&vddao_3v3>;
+				usb1v8-supply = <&vddio_ao1v8>;
 			};
+		};
+
+		dwc2_a: dwc2_a@ff400000 {
+			compatible = "amlogic,dwc2";
+			status = "disable";
+			device_name = "dwc2_a";
+			reg = <0x0 0xff400000 0x0 0x40000>;
+			interrupts = <GIC_SPI 31 IRQ_TYPE_LEVEL_HIGH>;
+			pl-periph-id = <0>; /** lm name */
+			clock-src = "usb0"; /** clock src */
+			port-id = <0>;  /** ref to mach/usb.h */
+			port-type = <2>;	/** 0: otg, 1: host, 2: slave */
+			port-speed = <0>; /** 0: default, high, 1: full */
+			port-config = <0>; /** 0: default */
+			/*0:default,1:single,2:incr,3:incr4,4:*/
+			/*incr8,5:incr16,6:disable*/
+			port-dma = <0>;
+			/** 0: hardware, 1: sw_host, 2: sw_slave*/
+			port-id-mode = <0>;
+			usb-fifo = <728>;
+			cpu-type = "v2";
+			phy-reg = <0xffe09000>;
+			phy-reg-size = <0xa0>;
+			/** phy-interface: 0x0: amlogic phy,*/
+			/*0x1: synopsys phy **/
+			phy-interface = <0x2>;
+			clocks = <&clkc CLKID_USB>,
+					 <&clkc CLKID_USB1_DDR_BRIDGE>;
+			clock-names = "usb_general",
+					"usb1";
+		};
+
+		pcie: pcie@fc000000 {
+			compatible = "amlogic, amlogic-pcie-v2";
+			reg = <0x0 0xfc000000 0x0 0x400000
+				0x0 0xff648000 0x0 0x2000
+				0x0 0xfc400000 0x0 0x200000
+				0x0 0xff646000 0x0 0x2000
+				0x0 0xffd01080 0x0 0x10>;
+			reg-names = "elbi", "cfg", "config", "phy", "reset";
+			interrupts = <GIC_SPI 221 IRQ_TYPE_EDGE_RISING>;
+			#interrupt-cells = <1>;
+			bus-range = <0x0 0xff>;
+			#address-cells = <3>;
+			#size-cells = <2>;
+			interrupt-map-mask = <0 0 0 0>;
+			interrupt-map = <0 0 0 0 &gic GIC_SPI 223 IRQ_TYPE_EDGE_RISING>;
+			device_type = "pci";
+			ranges = <0x81000000 0 0 0 0xfc600000 0x0 0x100000
+				/* downstream I/O */
+				0x82000000 0 0xfc700000 0x0 0xfc700000 0 0x1900000>;
+				/* non-prefetched memory */
+			num-lanes = <1>;
+			pcie-num = <1>;
+
+			clocks = <&clkc CLKID_PCIE_PLL
+				&clkc CLKID_PCIE_COMB
+				&clkc CLKID_PCIE_PHY
+				&clkc CLKID_PCIE_HCSL>;
+			clock-names = "pcie_refpll",
+					"pcie",
+					"pcie_phy",
+					"pcie_hcsl";
+			/*reset-gpio-type 0:Shared pad(no reset)1:OD pad2:Normal pad*/
+			gpio-type = <2>;
+			pcie-apb-rst-bit = <15>;
+			pcie-phy-rst-bit = <14>;
+			pcie-ctrl-a-rst-bit = <12>;
+			pwr-ctl = <1>;
+			pcie-ctrl-sleep-shift = <18>;
+			pcie-hhi-mem-pd-shift = <26>;
+			pcie-hhi-mem-pd-mask = <0xf>;
+			pcie-ctrl-iso-shift = <18>;
+			status = "disabled";
 		};
 
 		mali: gpu@ffe40000 {
@@ -2421,6 +2865,13 @@
 		};
 	};
 
+	rdma{
+		compatible = "amlogic, meson, rdma";
+		status = "okay";
+		interrupts = <GIC_SPI 89 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "rdma";
+	};
+
 	timer {
 		compatible = "arm,armv8-timer";
 		interrupts = <GIC_PPI 13
@@ -2431,7 +2882,6 @@
 			(GIC_CPU_MASK_RAW(0xff) | IRQ_TYPE_LEVEL_LOW)>,
 			     <GIC_PPI 10
 			(GIC_CPU_MASK_RAW(0xff) | IRQ_TYPE_LEVEL_LOW)>;
-		arm,no-tick-in-suspend;
 	};
 
 	xtal: xtal-clk {
@@ -2441,4 +2891,102 @@
 		#clock-cells = <0>;
 	};
 
+	jtag {
+		compatible = "amlogic, jtag";
+		status = "okay";
+		/* disable/jtag_a/jtag_b */
+		select = "disable";
+		pinctrl-names="jtag_a_pins", "jtag_b_pins";
+		pinctrl-0=<&jtag_a_pins>;
+		pinctrl-1=<&jtag_b_pins>;
+	};
+};
+
+&periphs_pinctrl {
+	sd_1bit_pins:sd_1bit_pins {
+		mux {
+			groups = "sdcard_d0_c",
+					"sdcard_cmd_c";
+			function = "sdcard";
+			input-enable;
+			bias-pull-up;
+			drive-strength = <4>;
+		};
+		mux1 {
+			groups = "sdcard_clk_c";
+			function = "sdcard";
+			bias-pull-up;
+			output-high;
+			drive-strength = <4>;
+		};
+	};
+
+	sd_clr_all_pins:sd_clr_all_pins {
+		mux {
+			groups = "GPIOC_0",
+				   "GPIOC_1",
+				   "GPIOC_2",
+				   "GPIOC_3",
+				   "GPIOC_5";
+			function = "gpio_periphs";
+			output-high;
+		};
+		mux1 {
+			groups = "GPIOC_4";
+			function = "gpio_periphs";
+			output-low;
+		};
+	};
+
+	sd_clr_noall_pins:sd_clr_noall_pins {
+		mux {
+			groups = "GPIOC_0",
+				   "GPIOC_1",
+				   "GPIOC_4",
+				   "GPIOC_5";
+			function = "gpio_periphs";
+			output-high;
+		};
+	};
+
+	ao_to_sd_uart_pins:ao_to_sd_uart_pins {
+		mux {
+			groups = "uart_ao_a_rx_c",
+					"uart_ao_a_tx_c";
+			function = "uart_ao_a_c";
+			bias-pull-up;
+			input-enable;
+		};
+	};
+};
+
+&ao_pinctrl {
+	sd_to_ao_uart_clr_pins:sd_to_ao_uart_clr_pins {
+		mux {
+			groups = "GPIOAO_0",
+				   "GPIOAO_1";
+			function = "gpio_aobus";
+		};
+	};
+
+};
+
+&gpu{
+	clocks = <&clkc CLKID_MALI>;
+	clock-names = "gpu_mux";
+
+	/*
+	 * Mali clocking is provided by two identical clock paths
+	 * MALI_0 and MALI_1 muxed to a single clock by a glitch
+	 * free mux to safely change frequency while running.
+	 */
+	assigned-clocks = <&clkc CLKID_MALI_0_SEL>,
+			  <&clkc CLKID_MALI_0>,
+			  <&clkc CLKID_MALI>; /* Glitch free mux */
+	assigned-clock-parents = <&clkc CLKID_FCLK_DIV2P5>,
+				 <0>, /* Do Nothing */
+				 <&clkc CLKID_MALI_0>;
+	assigned-clock-rates = <0>, /* Do Nothing */
+				   <800000000>,
+				   <0>; /* Do Nothing */
 };

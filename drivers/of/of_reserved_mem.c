@@ -9,7 +9,9 @@
  * Author: Josh Cartwright <joshc@codeaurora.org>
  */
 
+#ifndef CONFIG_AMLOGIC_MEMORY_EXTEND /* save print time */
 #define pr_fmt(fmt)	"OF: reserved mem: " fmt
+#endif
 
 #include <linux/err.h>
 #include <linux/of.h>
@@ -22,7 +24,7 @@
 #include <linux/slab.h>
 #include <linux/memblock.h>
 
-#define MAX_RESERVED_REGIONS	32
+#define MAX_RESERVED_REGIONS	64
 static struct reserved_mem reserved_mem[MAX_RESERVED_REGIONS];
 static int reserved_mem_count;
 
@@ -182,8 +184,16 @@ static int __init __reserved_mem_init_node(struct reserved_mem *rmem)
 
 		ret = initfn(rmem);
 		if (ret == 0) {
+		#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+			pr_emerg("\t%08lx - %08lx, %8ld KB, %s\n",
+				 (unsigned long)rmem->base,
+				 (unsigned long)(rmem->base + rmem->size),
+				 (unsigned long)(rmem->size >> 10),
+				 rmem->name);
+		#else
 			pr_info("initialized node %s, compatible id %s\n",
 				rmem->name, compat);
+		#endif
 			break;
 		}
 	}

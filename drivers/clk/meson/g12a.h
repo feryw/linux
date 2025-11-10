@@ -70,6 +70,7 @@
 #define HHI_MALI_CLK_CNTL		0x1b0
 #define HHI_VPU_CLKC_CNTL		0x1b4
 #define HHI_VPU_CLK_CNTL		0x1bC
+#define HHI_VIPNANOQ_CLK_CNTL		0x1c8
 #define HHI_HDMI_CLK_CNTL		0x1CC
 #define HHI_VDEC_CLK_CNTL		0x1E0
 #define HHI_VDEC2_CLK_CNTL		0x1E4
@@ -90,6 +91,8 @@
 #define HHI_MIPIDSI_PHY_CLK_CNTL	0x254
 #define HHI_NAND_CLK_CNTL		0x25C
 #define HHI_SD_EMMC_CLK_CNTL		0x264
+#define HHI_WAVE420L_CLK_CNTL		0x268
+#define HHI_WAVE420L_CLK_CNTL2		0x26C
 #define HHI_MPLL_CNTL0			0x278
 #define HHI_MPLL_CNTL1			0x27C
 #define HHI_MPLL_CNTL2			0x280
@@ -124,6 +127,7 @@
 #define HHI_SYS1_PLL_CNTL4		0x390
 #define HHI_SYS1_PLL_CNTL5		0x394
 #define HHI_SYS1_PLL_CNTL6		0x398
+#define HHI_BT656_CLK_CNTL		0x3d4  /* 0xf5 offset in datasheet1 */
 
 /*
  * CLKID index values
@@ -197,7 +201,6 @@
 #define CLKID_CPU_CLK_DYN1_SEL			183
 #define CLKID_CPU_CLK_DYN1_DIV			184
 #define CLKID_CPU_CLK_DYN1			185
-#define CLKID_CPU_CLK_DYN			186
 #define CLKID_CPU_CLK_DIV16_EN			188
 #define CLKID_CPU_CLK_DIV16			189
 #define CLKID_CPU_CLK_APB_DIV			190
@@ -254,11 +257,10 @@
 #define CLKID_DSU_CLK_DYN1_DIV			248
 #define CLKID_DSU_CLK_DYN1			249
 #define CLKID_DSU_CLK_DYN			250
-#define CLKID_DSU_CLK_FINAL			251
-
-#define NR_CLKS					256
 
 /* include the CLKIDs that have been made part of the DT binding */
 #include <dt-bindings/clock/g12a-clkc.h>
+
+#define NR_CLKS					CLKID_END
 
 #endif /* __G12A_H */

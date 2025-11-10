@@ -93,7 +93,9 @@
 #include <linux/kcov.h>
 #include <linux/livepatch.h>
 #include <linux/thread_info.h>
+#include <linux/cpufreq_times.h>
 #include <linux/stackleak.h>
+#include <linux/scs.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -101,6 +103,10 @@
 #include <asm/mmu_context.h>
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
+
+#ifdef CONFIG_AMLOGIC_VMAP
+#include <linux/amlogic/vmap_stack.h>
+#endif
 
 #include <trace/events/sched.h>
 
@@ -254,6 +260,9 @@ static unsigned long *alloc_thread_stack_node(struct task_struct *tsk, int node)
 	}
 	return stack;
 #else
+#ifdef CONFIG_AMLOGIC_VMAP
+	return aml_stack_alloc(node, tsk);
+#else /* CONFIG_AMLOGIC_VMAP */
 	struct page *page = alloc_pages_node(node, THREADINFO_GFP,
 					     THREAD_SIZE_ORDER);
 
@@ -262,11 +271,15 @@ static unsigned long *alloc_thread_stack_node(struct task_struct *tsk, int node)
 		return tsk->stack;
 	}
 	return NULL;
+#endif /* CONFIG_AMLOGIC_VMAP */
 #endif
 }
 
 static inline void free_thread_stack(struct task_struct *tsk)
 {
+#ifdef CONFIG_AMLOGIC_VMAP
+	aml_stack_free(tsk);
+#else /* CONFIG_AMLOGIC_VMAP */
 #ifdef CONFIG_VMAP_STACK
 	struct vm_struct *vm = task_stack_vm_area(tsk);
 
@@ -295,6 +308,7 @@ static inline void free_thread_stack(struct task_struct *tsk)
 #endif
 
 	__free_pages(virt_to_page(tsk->stack), THREAD_SIZE_ORDER);
+#endif /* CONFIG_AMLOGIC_VMAP */
 }
 # else
 static struct kmem_cache *thread_stack_cache;
@@ -369,6 +383,9 @@ void vm_area_free(struct vm_area_struct *vma)
 
 static void account_kernel_stack(struct task_struct *tsk, int account)
 {
+#ifdef CONFIG_AMLOGIC_VMAP
+	aml_account_task_stack(tsk, account);
+#else
 	void *stack = task_stack_page(tsk);
 	struct vm_struct *vm = task_stack_vm_area(tsk);
 
@@ -397,6 +414,7 @@ static void account_kernel_stack(struct task_struct *tsk, int account)
 		mod_memcg_obj_state(stack, MEMCG_KERNEL_STACK_KB,
 				    account * (THREAD_SIZE / 1024));
 	}
+#endif
 }
 
 static int memcg_charge_kernel_stack(struct task_struct *tsk)
@@ -451,6 +469,9 @@ void put_task_stack(struct task_struct *tsk)
 
 void free_task(struct task_struct *tsk)
 {
+	cpufreq_task_times_exit(tsk);
+	scs_release(tsk);
+
 #ifndef CONFIG_THREAD_INFO_IN_TASK
 	/*
 	 * The task is finally done with both the stack and thread_info,
@@ -466,7 +487,6 @@ void free_task(struct task_struct *tsk)
 #endif
 	rt_mutex_debug_task_free(tsk);
 	ftrace_graph_exit_task(tsk);
-	put_seccomp_filter(tsk);
 	arch_release_task_struct(tsk);
 	if (tsk->flags & PF_KTHREAD)
 		free_kthread_struct(tsk);
@@ -834,6 +854,8 @@ void __init fork_init(void)
 			  NULL, free_vm_stack_cache);
 #endif
 
+	scs_init();
+
 	lockdep_init_task(&init_task);
 	uprobes_init();
 }
@@ -850,7 +872,9 @@ void set_task_stack_end_magic(struct task_struct *tsk)
 	unsigned long *stackend;
 
 	stackend = end_of_stack(tsk);
+#ifndef CONFIG_AMLOGIC_VMAP
 	*stackend = STACK_END_MAGIC;	/* for overflow detection */
+#endif
 }
 
 static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
@@ -890,6 +914,10 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	refcount_set(&tsk->stack_refcount, 1);
 #endif
 
+	if (err)
+		goto free_stack;
+
+	err = scs_prepare(tsk, node);
 	if (err)
 		goto free_stack;
 
@@ -1869,6 +1897,8 @@ static __latent_entropy struct task_struct *copy_process(
 	if (!p)
 		goto fork_out;
 
+	cpufreq_task_times_init(p);
+
 	/*
 	 * This _must_ happen before we call free_task(), i.e. before we jump
 	 * to any of the bad_fork_* labels. This is to avoid freeing
@@ -2234,6 +2264,7 @@ static __latent_entropy struct task_struct *copy_process(
 		fd_install(pidfd, pidfile);
 
 	proc_fork_connector(p);
+	sched_post_fork(p);
 	cgroup_post_fork(p);
 	cgroup_threadgroup_change_end(current);
 	perf_event_fork(p);
@@ -2380,6 +2411,8 @@ long _do_fork(struct kernel_clone_args *args)
 
 	if (IS_ERR(p))
 		return PTR_ERR(p);
+
+	cpufreq_task_times_alloc(p);
 
 	/*
 	 * Do this prior waking up the new thread - the thread pointer

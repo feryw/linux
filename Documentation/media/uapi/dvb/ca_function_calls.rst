@@ -25,3 +25,6 @@ CA Function Calls
     ca-get-msg
     ca-send-msg
     ca-set-descr
+    ca-set-pid
+    ca-set-descr-ex
+    ca-sc2-set-descr-ex

@@ -18,6 +18,12 @@
 #include <linux/syscore_ops.h>
 #include <linux/uaccess.h>
 
+#ifdef CONFIG_AMLOGIC_DEBUG
+#include <linux/io.h>
+static unsigned int scramble_reg;
+core_param(scramble_reg, scramble_reg, uint, 0644);
+#endif
+
 /*
  * this indicates whether you can reboot with ctrl-alt-del: the default is yes
  */
@@ -32,7 +38,9 @@ EXPORT_SYMBOL(cad_pid);
 #define DEFAULT_REBOOT_MODE
 #endif
 enum reboot_mode reboot_mode DEFAULT_REBOOT_MODE;
+EXPORT_SYMBOL_GPL(reboot_mode);
 enum reboot_mode panic_reboot_mode = REBOOT_UNDEFINED;
+EXPORT_SYMBOL_GPL(panic_reboot_mode);
 
 /*
  * This variable is used privately to keep track of whether or not
@@ -250,7 +258,7 @@ void kernel_restart(char *cmd)
 		pr_emerg("Restarting system\n");
 	else
 		pr_emerg("Restarting system with command '%s'\n", cmd);
-	kmsg_dump(KMSG_DUMP_RESTART);
+	kmsg_dump(KMSG_DUMP_SHUTDOWN);
 	machine_restart(cmd);
 }
 EXPORT_SYMBOL_GPL(kernel_restart);
@@ -274,7 +282,7 @@ void kernel_halt(void)
 	migrate_to_reboot_cpu();
 	syscore_shutdown();
 	pr_emerg("System halted\n");
-	kmsg_dump(KMSG_DUMP_HALT);
+	kmsg_dump(KMSG_DUMP_SHUTDOWN);
 	machine_halt();
 }
 EXPORT_SYMBOL_GPL(kernel_halt);
@@ -292,13 +300,36 @@ void kernel_power_off(void)
 	migrate_to_reboot_cpu();
 	syscore_shutdown();
 	pr_emerg("Power down\n");
-	kmsg_dump(KMSG_DUMP_POWEROFF);
+	kmsg_dump(KMSG_DUMP_SHUTDOWN);
 	machine_power_off();
 }
 EXPORT_SYMBOL_GPL(kernel_power_off);
 
 DEFINE_MUTEX(system_transition_mutex);
 
+#ifdef CONFIG_AMLOGIC_DEBUG
+/* scramble_clear_preserve() will clear scramble_reg bit0,
+ * this will cause fresh ddr data after reboot
+ */
+static void scramble_clear_preserve(void)
+{
+	void __iomem *vaddr;
+	unsigned int val;
+
+	if (scramble_reg) {
+		vaddr = ioremap(scramble_reg, 4);
+		if (!vaddr)
+			return;
+
+		val = readl(vaddr);
+		val = val & (~0x1);
+		writel(val, vaddr);
+
+		iounmap(vaddr);
+		pr_info("clear STARTUP_KEY_PRESERVE bit0, no request to preserve REE Scramble Key\n");
+	}
+}
+#endif
 /*
  * Reboot system call: for obvious reasons only root may call it,
  * and even root needs to set up some magic numbers in the registers
@@ -344,6 +375,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 	mutex_lock(&system_transition_mutex);
 	switch (cmd) {
 	case LINUX_REBOOT_CMD_RESTART:
+#ifdef CONFIG_AMLOGIC_DEBUG
+		scramble_clear_preserve();
+#endif
 		kernel_restart(NULL);
 		break;
 
@@ -361,6 +395,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 		panic("cannot halt");
 
 	case LINUX_REBOOT_CMD_POWER_OFF:
+#ifdef CONFIG_AMLOGIC_DEBUG
+		scramble_clear_preserve();
+#endif
 		kernel_power_off();
 		do_exit(0);
 		break;
@@ -373,6 +410,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 		}
 		buffer[sizeof(buffer) - 1] = '\0';
 
+#ifdef CONFIG_AMLOGIC_DEBUG
+		scramble_clear_preserve();
+#endif
 		kernel_restart(buffer);
 		break;
 

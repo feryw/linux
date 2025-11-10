@@ -28,6 +28,7 @@
 #include <linux/ctype.h>
 #include <linux/debugobjects.h>
 #include <linux/kallsyms.h>
+#include <linux/kfence.h>
 #include <linux/memory.h>
 #include <linux/math64.h>
 #include <linux/fault-inject.h>
@@ -759,9 +760,11 @@ static void restore_bytes(struct kmem_cache *s, char *message, u8 data,
 	memset(from, data, to - from);
 }
 
-static int check_bytes_and_report(struct kmem_cache *s, struct page *page,
-			u8 *object, char *what,
-			u8 *start, unsigned int value, unsigned int bytes)
+static int notrace check_bytes_and_report(struct kmem_cache *s,
+					  struct page *page, u8 *object,
+					  char *what, u8 *start,
+					  unsigned int value,
+					  unsigned int bytes)
 {
 	u8 *fault;
 	u8 *end;
@@ -1464,6 +1467,11 @@ static inline bool slab_free_freelist_hook(struct kmem_cache *s,
 	void *old_tail = *tail ? *tail : *head;
 	int rsize;
 
+	if (is_kfence_address(next)) {
+		slab_free_hook(s, next);
+		return true;
+	}
+
 	/* Head and tail of the reconstructed freelist */
 	*head = NULL;
 	*tail = NULL;
@@ -1537,7 +1545,9 @@ static inline struct page *alloc_slab_page(struct kmem_cache *s,
 		__free_pages(page, order);
 		page = NULL;
 	}
-
+#ifdef CONFIG_AMLOGIC_SLAB_TRACE
+	slab_trace_add_page(page, order, s, flags);
+#endif
 	return page;
 }
 
@@ -1765,6 +1775,9 @@ static void __free_slab(struct kmem_cache *s, struct page *page)
 	if (current->reclaim_state)
 		current->reclaim_state->reclaimed_slab += pages;
 	uncharge_slab_page(page, order, s);
+#ifdef CONFIG_AMLOGIC_SLAB_TRACE
+	slab_trace_remove_page(page, order, s);
+#endif
 	__free_pages(page, order);
 }
 
@@ -2647,6 +2660,9 @@ load_freelist:
 	VM_BUG_ON(!c->page->frozen);
 	c->freelist = get_freepointer(s, freelist);
 	c->tid = next_tid(c->tid);
+#ifdef CONFIG_AMLOGIC_SLAB_TRACE
+	slab_trace_mark_object(freelist, addr, s);
+#endif
 	return freelist;
 
 new_slab:
@@ -2675,6 +2691,9 @@ new_slab:
 		goto new_slab;	/* Slab failed checks. Next slab needed */
 
 	deactivate_slab(s, page, get_freepointer(s, freelist), c);
+#ifdef CONFIG_AMLOGIC_SLAB_TRACE
+	slab_trace_mark_object(freelist, addr, s);
+#endif
 	return freelist;
 }
 
@@ -2725,16 +2744,27 @@ static __always_inline void maybe_wipe_obj_freeptr(struct kmem_cache *s,
  * Otherwise we can simply pick the next object from the lockless free list.
  */
 static __always_inline void *slab_alloc_node(struct kmem_cache *s,
-		gfp_t gfpflags, int node, unsigned long addr)
+		gfp_t gfpflags, int node, unsigned long addr, size_t orig_size)
 {
 	void *object;
 	struct kmem_cache_cpu *c;
 	struct page *page;
 	unsigned long tid;
+	struct kmem_cache *root_s = s;
 
 	s = slab_pre_alloc_hook(s, gfpflags);
 	if (!s)
 		return NULL;
+
+	/*
+	 * 5.4 note: passing in original cachep to avoid problems with memcg
+	 * accounting. Making KFENCE properly work with memcgs on older kernels
+	 * is not worth the effort.
+	 */
+	object = kfence_alloc(root_s, orig_size, gfpflags);
+	if (unlikely(object))
+		goto out;
+
 redo:
 	/*
 	 * Must read kmem_cache cpu data via this cpu ptr. Preemption is
@@ -2801,6 +2831,9 @@ redo:
 		}
 		prefetch_freepointer(s, next_object);
 		stat(s, ALLOC_FASTPATH);
+	#ifdef CONFIG_AMLOGIC_SLAB_TRACE
+		slab_trace_mark_object(object, addr, s);
+	#endif
 	}
 
 	maybe_wipe_obj_freeptr(s, object);
@@ -2808,20 +2841,21 @@ redo:
 	if (unlikely(slab_want_init_on_alloc(gfpflags, s)) && object)
 		memset(object, 0, s->object_size);
 
+out:
 	slab_post_alloc_hook(s, gfpflags, 1, &object);
 
 	return object;
 }
 
 static __always_inline void *slab_alloc(struct kmem_cache *s,
-		gfp_t gfpflags, unsigned long addr)
+		gfp_t gfpflags, unsigned long addr, size_t orig_size)
 {
-	return slab_alloc_node(s, gfpflags, NUMA_NO_NODE, addr);
+	return slab_alloc_node(s, gfpflags, NUMA_NO_NODE, addr, orig_size);
 }
 
 void *kmem_cache_alloc(struct kmem_cache *s, gfp_t gfpflags)
 {
-	void *ret = slab_alloc(s, gfpflags, _RET_IP_);
+	void *ret = slab_alloc(s, gfpflags, _RET_IP_, s->object_size);
 
 	trace_kmem_cache_alloc(_RET_IP_, ret, s->object_size,
 				s->size, gfpflags);
@@ -2833,7 +2867,7 @@ EXPORT_SYMBOL(kmem_cache_alloc);
 #ifdef CONFIG_TRACING
 void *kmem_cache_alloc_trace(struct kmem_cache *s, gfp_t gfpflags, size_t size)
 {
-	void *ret = slab_alloc(s, gfpflags, _RET_IP_);
+	void *ret = slab_alloc(s, gfpflags, _RET_IP_, size);
 	trace_kmalloc(_RET_IP_, ret, size, s->size, gfpflags);
 	ret = kasan_kmalloc(s, ret, size, gfpflags);
 	return ret;
@@ -2844,7 +2878,7 @@ EXPORT_SYMBOL(kmem_cache_alloc_trace);
 #ifdef CONFIG_NUMA
 void *kmem_cache_alloc_node(struct kmem_cache *s, gfp_t gfpflags, int node)
 {
-	void *ret = slab_alloc_node(s, gfpflags, node, _RET_IP_);
+	void *ret = slab_alloc_node(s, gfpflags, node, _RET_IP_, s->object_size);
 
 	trace_kmem_cache_alloc_node(_RET_IP_, ret,
 				    s->object_size, s->size, gfpflags, node);
@@ -2858,7 +2892,7 @@ void *kmem_cache_alloc_node_trace(struct kmem_cache *s,
 				    gfp_t gfpflags,
 				    int node, size_t size)
 {
-	void *ret = slab_alloc_node(s, gfpflags, node, _RET_IP_);
+	void *ret = slab_alloc_node(s, gfpflags, node, _RET_IP_, size);
 
 	trace_kmalloc_node(_RET_IP_, ret,
 			   size, s->size, gfpflags, node);
@@ -2891,6 +2925,9 @@ static void __slab_free(struct kmem_cache *s, struct page *page,
 	unsigned long uninitialized_var(flags);
 
 	stat(s, FREE_SLOWPATH);
+
+	if (kfence_free(head))
+		return;
 
 	if (kmem_cache_debug(s) &&
 	    !free_debug_processing(s, page, head, tail, cnt, addr))
@@ -3029,6 +3066,10 @@ redo:
 	/* Same with comment on barrier() in slab_alloc_node() */
 	barrier();
 
+#ifdef CONFIG_AMLOGIC_SLAB_TRACE
+	slab_trace_remove_object(head, s);
+#endif
+
 	if (likely(page == c->page)) {
 		void **freelist = READ_ONCE(c->freelist);
 
@@ -3123,6 +3164,9 @@ int build_detached_freelist(struct kmem_cache *s, size_t size,
 		if (unlikely(!PageSlab(page))) {
 			BUG_ON(!PageCompound(page));
 			kfree_hook(object);
+		#ifdef CONFIG_AMLOGIC_SLAB_TRACE
+			slab_trace_remove_page(page, compound_order(page), s);
+		#endif
 			__free_pages(page, compound_order(page));
 			p[size] = NULL; /* mark object processed */
 			return size;
@@ -3131,6 +3175,13 @@ int build_detached_freelist(struct kmem_cache *s, size_t size,
 		df->s = page->slab_cache;
 	} else {
 		df->s = cache_from_obj(s, object); /* Support for memcg */
+	}
+
+	if (is_kfence_address(object)) {
+		slab_free_hook(df->s, object);
+		__kfence_free(object);
+		p[size] = NULL; /* mark object processed */
+		return size;
 	}
 
 	/* Start new detached freelist */
@@ -3192,6 +3243,7 @@ int kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags, size_t size,
 {
 	struct kmem_cache_cpu *c;
 	int i;
+	struct kmem_cache *root_s = s;
 
 	/* memcg and kmem_cache debug support */
 	s = slab_pre_alloc_hook(s, flags);
@@ -3206,8 +3258,19 @@ int kmem_cache_alloc_bulk(struct kmem_cache *s, gfp_t flags, size_t size,
 	c = this_cpu_ptr(s->cpu_slab);
 
 	for (i = 0; i < size; i++) {
-		void *object = c->freelist;
+		/*
+		 * 5.4 note: passing in original cachep to avoid problems with memcg
+		 * accounting. Making KFENCE properly work with memcgs on older kernels
+		 * is not worth the effort.
+		 */
+		void *object = kfence_alloc(root_s, s->object_size, flags);
 
+		if (unlikely(object)) {
+			p[i] = object;
+			continue;
+		}
+
+		object = c->freelist;
 		if (unlikely(!object)) {
 			/*
 			 * We may have removed an object from c->freelist using
@@ -3334,6 +3397,9 @@ static inline unsigned int slab_order(unsigned int size,
 
 static inline int calculate_order(unsigned int size)
 {
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+	return get_order(size);
+#else
 	unsigned int order;
 	unsigned int min_objects;
 	unsigned int max_objects;
@@ -3381,6 +3447,7 @@ static inline int calculate_order(unsigned int size)
 	if (order < MAX_ORDER)
 		return order;
 	return -ENOSYS;
+#endif
 }
 
 static void
@@ -3681,6 +3748,13 @@ static int calculate_sizes(struct kmem_cache *s, int forced_order)
 	return !!oo_objects(s->oo);
 }
 
+#ifdef CONFIG_AMLOGIC_SLAB_TRACE
+int get_cache_max_order(struct kmem_cache *s)
+{
+	return oo_order(s->oo);
+}
+#endif
+
 static int kmem_cache_open(struct kmem_cache *s, slab_flags_t flags)
 {
 	s->flags = kmem_cache_flags(s->size, flags, s->name, s->ctor);
@@ -3853,6 +3927,25 @@ static int __init setup_slub_min_objects(char *str)
 
 __setup("slub_min_objects=", setup_slub_min_objects);
 
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+static void aml_slub_free_large(struct page *page, const void *obj)
+{
+	unsigned int nr_pages, i;
+
+	if (page) {
+		__ClearPageHead(page);
+		ClearPageOwnerPriv1(page);
+		nr_pages = page->index;
+		pr_debug("%s, page:%p, pages:%d, obj:%p\n",
+			__func__, page_address(page), nr_pages, obj);
+		for (i = 0; i < nr_pages; i++)  {
+			__free_pages(page, 0);
+			page++;
+		}
+	}
+}
+#endif
+
 void *__kmalloc(size_t size, gfp_t flags)
 {
 	struct kmem_cache *s;
@@ -3866,7 +3959,7 @@ void *__kmalloc(size_t size, gfp_t flags)
 	if (unlikely(ZERO_OR_NULL_PTR(s)))
 		return s;
 
-	ret = slab_alloc(s, flags, _RET_IP_);
+	ret = slab_alloc(s, flags, _RET_IP_, size);
 
 	trace_kmalloc(_RET_IP_, ret, size, s->size, flags);
 
@@ -3914,7 +4007,7 @@ void *__kmalloc_node(size_t size, gfp_t flags, int node)
 	if (unlikely(ZERO_OR_NULL_PTR(s)))
 		return s;
 
-	ret = slab_alloc_node(s, flags, node, _RET_IP_);
+	ret = slab_alloc_node(s, flags, node, _RET_IP_, size);
 
 	trace_kmalloc_node(_RET_IP_, ret, size, s->size, flags, node);
 
@@ -3940,6 +4033,7 @@ void __check_heap_object(const void *ptr, unsigned long n, struct page *page,
 	struct kmem_cache *s;
 	unsigned int offset;
 	size_t object_size;
+	bool is_kfence = is_kfence_address(ptr);
 
 	ptr = kasan_reset_tag(ptr);
 
@@ -3952,10 +4046,13 @@ void __check_heap_object(const void *ptr, unsigned long n, struct page *page,
 			       to_user, 0, n);
 
 	/* Find offset within object. */
-	offset = (ptr - page_address(page)) % s->size;
+	if (is_kfence)
+		offset = ptr - kfence_object_start(ptr);
+	else
+		offset = (ptr - page_address(page)) % s->size;
 
 	/* Adjust for redzone and reject if within the redzone. */
-	if (kmem_cache_debug(s) && s->flags & SLAB_RED_ZONE) {
+	if (!is_kfence && kmem_cache_debug(s) && s->flags & SLAB_RED_ZONE) {
 		if (offset < s->red_left_pad)
 			usercopy_abort("SLUB object in left red zone",
 				       s->name, to_user, offset, n);
@@ -3996,6 +4093,15 @@ size_t __ksize(const void *object)
 
 	if (unlikely(!PageSlab(page))) {
 		WARN_ON(!PageCompound(page));
+
+	#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+		if (unlikely(PageOwnerPriv1(page))) {
+			pr_debug("%s, obj:%p, page:%p, index:%ld, size:%ld\n",
+				__func__, object, page_address(page),
+				page->index, PAGE_SIZE * page->index);
+			return PAGE_SIZE * page->index;
+		}
+	#endif
 		return page_size(page);
 	}
 
@@ -4016,11 +4122,29 @@ void kfree(const void *x)
 	page = virt_to_head_page(x);
 	if (unlikely(!PageSlab(page))) {
 		unsigned int order = compound_order(page);
+	#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+		unsigned int nr_pages;
+	#endif /* CONFIG_AMLOGIC_MEMORY_EXTEND */
 
 		BUG_ON(!PageCompound(page));
 		kfree_hook(object);
+	#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+		if (page->index)
+			nr_pages = page->index;
+		else
+			nr_pages = 1 << order;
+		mod_node_page_state(page_pgdat(page), NR_SLAB_UNRECLAIMABLE,
+			-(nr_pages));
+		mod_node_page_state(page_pgdat(page), NR_SLAB_UNRECLAIMABLE_O,
+			-(nr_pages));
+		if (unlikely(PageOwnerPriv1(page))) {
+			aml_slub_free_large(page, x);
+			return;
+		}
+	#else
 		mod_node_page_state(page_pgdat(page), NR_SLAB_UNRECLAIMABLE,
 				    -(1 << order));
+	#endif /* CONFIG_AMLOGIC_MEMORY_EXTEND */
 		__free_pages(page, order);
 		return;
 	}
@@ -4321,6 +4445,9 @@ void __init kmem_cache_init(void)
 	/* Now we can use the kmem_cache to allocate kmalloc slabs */
 	setup_kmalloc_cache_index_table();
 	create_kmalloc_caches(0);
+#ifdef CONFIG_AMLOGIC_SLAB_TRACE
+	slab_trace_init();
+#endif
 
 	/* Setup random freelists for each cache */
 	init_freelist_randomization();
@@ -4402,13 +4529,14 @@ void *__kmalloc_track_caller(size_t size, gfp_t gfpflags, unsigned long caller)
 	if (unlikely(ZERO_OR_NULL_PTR(s)))
 		return s;
 
-	ret = slab_alloc(s, gfpflags, caller);
+	ret = slab_alloc(s, gfpflags, caller, size);
 
 	/* Honor the call site pointer we received. */
 	trace_kmalloc(caller, ret, size, s->size, gfpflags);
 
 	return ret;
 }
+EXPORT_SYMBOL(__kmalloc_track_caller);
 
 #ifdef CONFIG_NUMA
 void *__kmalloc_node_track_caller(size_t size, gfp_t gfpflags,
@@ -4432,13 +4560,14 @@ void *__kmalloc_node_track_caller(size_t size, gfp_t gfpflags,
 	if (unlikely(ZERO_OR_NULL_PTR(s)))
 		return s;
 
-	ret = slab_alloc_node(s, gfpflags, node, caller);
+	ret = slab_alloc_node(s, gfpflags, node, caller, size);
 
 	/* Honor the call site pointer we received. */
 	trace_kmalloc_node(caller, ret, size, s->size, gfpflags, node);
 
 	return ret;
 }
+EXPORT_SYMBOL(__kmalloc_node_track_caller);
 #endif
 
 #ifdef CONFIG_SYSFS

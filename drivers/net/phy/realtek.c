@@ -12,6 +12,14 @@
 #include <linux/phy.h>
 #include <linux/module.h>
 
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+#include <linux/types.h>
+#include <linux/input.h>
+#include <linux/kernel.h>
+#include <linux/delay.h>
+#include <linux/netdevice.h>
+#endif
+
 #define RTL821x_PHYSR				0x11
 #define RTL821x_PHYSR_DUPLEX			BIT(13)
 #define RTL821x_PHYSR_SPEED			GENMASK(15, 14)
@@ -27,6 +35,13 @@
 #define RTL821x_PAGE_SELECT			0x1f
 
 #define RTL8211F_INSR				0x1d
+
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+#define RTL8211F_PHYCR1                         0x18
+#define RTL8211F_ALDPS_PLL_OFF			BIT(1)
+#define RTL8211F_ALDPS_ENABLE			BIT(2)
+#define RTL8211F_ALDPS_XTAL_OFF			BIT(12)
+#endif
 
 #define RTL8211F_TX_DELAY			BIT(8)
 #define RTL8211E_TX_DELAY			BIT(1)
@@ -169,12 +184,21 @@ static int rtl8211c_config_init(struct phy_device *phydev)
 			    CTL1000_ENABLE_MASTER | CTL1000_AS_MASTER);
 }
 
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+unsigned int support_gpio_wol;
+EXPORT_SYMBOL_GPL(support_gpio_wol);
+#endif
 static int rtl8211f_config_init(struct phy_device *phydev)
 {
 	struct device *dev = &phydev->mdio.dev;
 	u16 val;
-	int ret;
+	int ret, reg;
 
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+	/*sync with 5.15 realetk.c*/
+	val = RTL8211F_ALDPS_ENABLE | RTL8211F_ALDPS_PLL_OFF | RTL8211F_ALDPS_XTAL_OFF;
+	phy_modify_paged_changed(phydev, 0xa43, RTL8211F_PHYCR1, val, val);
+#endif
 	/* enable TX-delay for rgmii-{id,txid}, and disable it for rgmii and
 	 * rgmii-rxid. The RX-delay can be enabled by the external RXDLY pin.
 	 */
@@ -206,6 +230,40 @@ static int rtl8211f_config_init(struct phy_device *phydev)
 			val ? "enabled" : "disabled");
 	}
 
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+	/*disable clk_out pin 35 set page 0x0a43 reg25.0 as 0*/
+	phy_write(phydev, RTL821x_PAGE_SELECT, 0x0a43);
+	reg = phy_read(phydev, 0x19);
+	/*set reg25 bit0 as 0*/
+	reg = phy_write(phydev, 0x19, reg & 0xfffe);
+
+	/*pin 31 pull high*/
+	phy_write(phydev, RTL821x_PAGE_SELECT, 0xd40);
+	reg = phy_read(phydev, 0x16);
+	phy_write(phydev, 0x16, reg | (1 << 5));
+	/* switch to page 0 */
+	phy_write(phydev, RTL821x_PAGE_SELECT, 0x0);
+	/*reset phy to apply*/
+	reg = phy_write(phydev, 0x0, 0x9200);
+
+	if (support_gpio_wol) {
+		/* config mac address for wol*/
+		if (phydev->attached_dev) {
+			unsigned char *mac_addr = phydev->attached_dev->dev_addr;
+			pr_info("set mac for wol = %02x:%02x:%02x:%02x:%02x:%02x\n",
+				mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+			phy_write(phydev, RTL821x_PAGE_SELECT, 0xd8c);
+			phy_write(phydev, 0x10, phydev->attached_dev->dev_addr[0] |
+						(phydev->attached_dev->dev_addr[1] << 8));
+			phy_write(phydev, 0x11, phydev->attached_dev->dev_addr[2] |
+						(phydev->attached_dev->dev_addr[3] << 8));
+			phy_write(phydev, 0x12, phydev->attached_dev->dev_addr[4] |
+						(phydev->attached_dev->dev_addr[5] << 8));
+		} else {
+			pr_info("set wol mac failed\n");
+		}
+	}
+#endif
 	return 0;
 }
 
@@ -401,6 +459,125 @@ static int rtl8125_config_aneg(struct phy_device *phydev)
 	return __genphy_config_aneg(phydev, ret);
 }
 
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+static int aml_rtl8211f_read_status(struct phy_device *phydev)
+{
+	unsigned int aml_link_speed = 0;
+	int aml_lpadv = 0;
+	int err, old_link = phydev->link;
+
+	/* Update the link, but return if there was an error */
+	err = genphy_update_link(phydev);
+	if (err)
+		return err;
+
+	/* why bother the PHY if nothing can have changed */
+	if (phydev->autoneg == AUTONEG_ENABLE && old_link && phydev->link)
+		return 0;
+
+	phydev->speed = SPEED_UNKNOWN;
+	phydev->duplex = DUPLEX_UNKNOWN;
+	phydev->pause = 0;
+	phydev->asym_pause = 0;
+
+	err = genphy_read_lpa(phydev);
+	if (err < 0)
+		return err;
+
+	if (phydev->autoneg == AUTONEG_ENABLE && phydev->autoneg_complete) {
+	//	phy_resolve_aneg_linkmode(phydev);
+		aml_lpadv = phy_read_paged(phydev, 0xa43, 0x1a);
+		if (aml_lpadv < 0)
+			return aml_lpadv;
+
+		phydev->duplex = aml_lpadv & 0x8 ? DUPLEX_FULL : DUPLEX_HALF;
+		phydev->link = aml_lpadv & 0x4 ? 1 : 0;
+		aml_link_speed = (aml_lpadv & 0x30) >> 4;
+
+		switch (aml_link_speed) {
+		case 0:
+			phydev->speed = SPEED_10;
+			break;
+		case 1:
+			phydev->speed = SPEED_100;
+			break;
+		case 2:
+			phydev->speed = SPEED_1000;
+			break;
+		default:
+			pr_info("wzh no match speed\n");
+			break;
+		}
+	} else if (phydev->autoneg == AUTONEG_DISABLE) {
+		int bmcr = phy_read(phydev, MII_BMCR);
+
+		if (bmcr < 0)
+			return bmcr;
+
+		if (bmcr & BMCR_FULLDPLX)
+			phydev->duplex = DUPLEX_FULL;
+		else
+			phydev->duplex = DUPLEX_HALF;
+
+		if (bmcr & BMCR_SPEED1000)
+			phydev->speed = SPEED_1000;
+		else if (bmcr & BMCR_SPEED100)
+			phydev->speed = SPEED_100;
+		else
+			phydev->speed = SPEED_10;
+	}
+
+	return 0;
+}
+
+int rtl8211f_suspend(struct phy_device *phydev)
+{
+	int value = 0;
+
+	if (support_gpio_wol) {
+		mutex_lock(&phydev->lock);
+		phy_write(phydev, RTL821x_PAGE_SELECT, 0xd8a);
+		/*set magic packet for wol*/
+		phy_write(phydev, 0x10, 0x1000);
+		phy_write(phydev, 0x11, 0x9fff);
+		/*pad isolation*/
+		value = phy_read(phydev, 0x13);
+		phy_write(phydev, 0x13, value | (0x1 << 15));
+		phy_write(phydev, RTL821x_PAGE_SELECT, 0);
+
+		mutex_unlock(&phydev->lock);
+	} else {
+		genphy_suspend(phydev);
+	}
+	return 0;
+}
+
+int rtl8211f_resume(struct phy_device *phydev)
+{
+	int value;
+
+	if (support_gpio_wol) {
+		phy_write(phydev, RTL821x_PAGE_SELECT, 0xd8a);
+
+		//mutex_lock(&phydev->lock);
+		phy_write(phydev, 0x10, 0x0);
+		/*reset wol*/
+		value = phy_read(phydev, 0x11);
+		phy_write(phydev, 0x11, value & ~(0x1 << 15));
+		/*pad isolation*/
+		value = phy_read(phydev, 0x13);
+		phy_write(phydev, 0x13, value & ~(0x1 << 15));
+		phy_write(phydev, RTL821x_PAGE_SELECT, 0);
+
+	//	mutex_unlock(&phydev->lock);
+		pr_debug("%s %d\n", __func__, __LINE__);
+	} else {
+		genphy_resume(phydev);
+	}
+	return 0;
+}
+#endif
+
 static int rtl8125_read_status(struct phy_device *phydev)
 {
 	if (phydev->autoneg == AUTONEG_ENABLE) {
@@ -517,8 +694,14 @@ static struct phy_driver realtek_drvs[] = {
 		.config_init	= &rtl8211f_config_init,
 		.ack_interrupt	= &rtl8211f_ack_interrupt,
 		.config_intr	= &rtl8211f_config_intr,
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+		.read_status	= &aml_rtl8211f_read_status,
+		.suspend	= rtl8211f_suspend,
+		.resume		= rtl8211f_resume,
+#else
 		.suspend	= genphy_suspend,
 		.resume		= genphy_resume,
+#endif
 		.read_page	= rtl821x_read_page,
 		.write_page	= rtl821x_write_page,
 	}, {
@@ -555,6 +738,22 @@ static struct phy_driver realtek_drvs[] = {
 		.config_intr	= genphy_no_config_intr,
 		.suspend	= genphy_suspend,
 		.resume		= genphy_resume,
+	}, {
+		PHY_ID_MATCH_EXACT(0x001cc878),
+		.name		= "RTL8211F-VD Gigabit Ethernet",
+		.config_init	= &rtl8211f_config_init,
+		.ack_interrupt	= &rtl8211f_ack_interrupt,
+		.config_intr	= &rtl8211f_config_intr,
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+		.read_status	= &aml_rtl8211f_read_status,
+		.suspend    = rtl8211f_suspend,
+		.resume     = rtl8211f_resume,
+#else
+		.suspend    = genphy_suspend,
+		.resume     = genphy_resume,
+#endif
+		.read_page	= rtl821x_read_page,
+		.write_page	= rtl821x_write_page,
 	},
 };
 

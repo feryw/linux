@@ -131,6 +131,9 @@ enum pageflags {
 	PG_young,
 	PG_idle,
 #endif
+#if defined(CONFIG_AMLOGIC_CMA) && !defined(CONFIG_KASAN)
+	PG_cma_allocating,      /* indicate page is under cma allocating */
+#endif
 	__NR_PAGEFLAGS,
 
 	/* Filesystems */
@@ -325,6 +328,10 @@ PAGEFLAG(Workingset, workingset, PF_HEAD)
 __PAGEFLAG(Slab, slab, PF_NO_TAIL)
 __PAGEFLAG(SlobFree, slob_free, PF_NO_TAIL)
 PAGEFLAG(Checked, checked, PF_NO_COMPOUND)	   /* Used by some filesystems */
+
+#if defined(CONFIG_AMLOGIC_CMA) && !defined(CONFIG_KASAN)
+PAGEFLAG(CmaAllocating, cma_allocating, PF_ANY)
+#endif
 
 /* Xen */
 PAGEFLAG(Pinned, pinned, PF_NO_COMPOUND)

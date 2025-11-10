@@ -12,6 +12,8 @@
 #include <linux/usb/hcd.h>
 #include "usb.h"
 
+#include <trace/hooks/usb.h>
+
 struct quirk_entry {
 	u16 vid;
 	u16 pid;
@@ -519,6 +521,10 @@ static const struct usb_device_id usb_quirk_list[] = {
 
 	/* INTEL VALUE SSD */
 	{ USB_DEVICE(0x8086, 0xf1a5), .driver_info = USB_QUIRK_RESET_RESUME },
+#ifdef CONFIG_AMLOGIC_USB
+	{ USB_DEVICE(0x1fc9, 0x0011), .driver_info =
+			USB_QUIRK_DEVICE_QUALIFIER },
+#endif
 
 	{ }  /* terminating entry must be last */
 };
@@ -527,7 +533,11 @@ static const struct usb_device_id usb_interface_quirk_list[] = {
 	/* Logitech UVC Cameras */
 	{ USB_VENDOR_AND_INTERFACE_INFO(0x046d, USB_CLASS_VIDEO, 1, 0),
 	  .driver_info = USB_QUIRK_RESET_RESUME },
-
+#ifdef CONFIG_AMLOGIC_USB
+	/* ASUS Base Station(T100) */
+	{ USB_DEVICE(0x0b05, 0x17e0), .driver_info =
+			USB_QUIRK_IGNORE_REMOTE_WAKEUP },
+#endif
 	{ }  /* terminating entry must be last */
 };
 
@@ -689,6 +699,8 @@ void usb_detect_quirks(struct usb_device *udev)
 	if (udev->descriptor.bDeviceClass == USB_CLASS_HUB)
 		udev->persist_enabled = 1;
 #endif	/* CONFIG_USB_DEFAULT_PERSIST */
+
+	trace_android_vh_usb_persist_overwrite(udev);
 }
 
 void usb_detect_interface_quirks(struct usb_device *udev)
@@ -711,3 +723,72 @@ void usb_release_quirk_list(void)
 	quirk_list = NULL;
 	mutex_unlock(&quirk_mutex);
 }
+
+#ifdef CONFIG_AMLOGIC_USB
+#include <linux/amlogic/cpu_version.h>
+
+/*
+ * Entries for bt intr endpoints that should be change to bulk when parsing
+ * configuration descriptors.
+ *
+ * Matched for devices with USB_QUIRK_ENDPOINT_BLACKLIST.
+ */
+static const struct usb_device_id bt_intep_blacklist[] = {
+	{ USB_DEVICE(0x0BDA, 0xC820), .driver_info = 0x81},
+	{ USB_DEVICE(0x0BDA, 0xC82C), .driver_info = 0x81},
+	{ USB_DEVICE(0x0BDA, 0xD723), .driver_info = 0x81},
+	{ USB_DEVICE(0x0BDA, 0xB82C), .driver_info = 0x81},
+	{ }
+};
+
+static const struct usb_chip_id usb_h06_blacklist[] = {
+	{ USB_CHIP(MESON_CPU_MAJOR_ID_T3, 0xA)},
+	{ USB_CHIP(MESON_CPU_MAJOR_ID_T5W, 0xA)},
+	{ }
+};
+
+bool usb_find_chip(void)
+{
+	const struct usb_chip_id *id;
+
+	for (id = usb_h06_blacklist; id->match_flags; ++id) {
+		if ((get_cpu_type() ==  id->chip_id) &&
+			(get_meson_cpu_version(MESON_CPU_VERSION_LVL_MINOR) == id->version_id))
+			return true;
+	}
+
+	return false;
+}
+
+bool bt_intep_is_blacklist(struct usb_device *udev)
+{
+	const struct usb_device_id *id;
+
+	if (!usb_find_chip())
+		return false;
+
+	for (id = bt_intep_blacklist; id->match_flags; ++id) {
+		if (usb_match_device(udev, id))
+			return true;
+	}
+	return false;
+}
+
+bool bt_epaddr_is_blacklist(struct usb_endpoint_descriptor *epd)
+{
+	const struct usb_device_id *id;
+	unsigned int address;
+
+	if (!usb_find_chip())
+		return false;
+
+	for (id = usb_endpoint_blacklist; id->match_flags; ++id) {
+		address = id->driver_info;
+		if (address == epd->bEndpointAddress)
+			return true;
+	}
+
+	return false;
+}
+#endif
+

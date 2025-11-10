@@ -20,6 +20,7 @@
 #include <linux/atomic.h>
 #include <linux/mm_types.h>
 #include <linux/page-flags.h>
+#include <linux/android_kabi.h>
 #include <asm/page.h>
 
 /* Free memory management - zoned buddy allocator.  */
@@ -42,8 +43,6 @@ enum migratetype {
 	MIGRATE_UNMOVABLE,
 	MIGRATE_MOVABLE,
 	MIGRATE_RECLAIMABLE,
-	MIGRATE_PCPTYPES,	/* the number of types on the pcp lists */
-	MIGRATE_HIGHATOMIC = MIGRATE_PCPTYPES,
 #ifdef CONFIG_CMA
 	/*
 	 * MIGRATE_CMA migration type is designed to mimic the way
@@ -60,6 +59,8 @@ enum migratetype {
 	 */
 	MIGRATE_CMA,
 #endif
+	MIGRATE_PCPTYPES, /* the number of types on the pcp lists */
+	MIGRATE_HIGHATOMIC = MIGRATE_PCPTYPES,
 #ifdef CONFIG_MEMORY_ISOLATION
 	MIGRATE_ISOLATE,	/* can't allocate from here */
 #endif
@@ -72,9 +73,11 @@ extern const char * const migratetype_names[MIGRATE_TYPES];
 #ifdef CONFIG_CMA
 #  define is_migrate_cma(migratetype) unlikely((migratetype) == MIGRATE_CMA)
 #  define is_migrate_cma_page(_page) (get_pageblock_migratetype(_page) == MIGRATE_CMA)
+#  define get_cma_migrate_type() MIGRATE_CMA
 #else
 #  define is_migrate_cma(migratetype) false
 #  define is_migrate_cma_page(_page) false
+#  define get_cma_migrate_type() MIGRATE_MOVABLE
 #endif
 
 static inline bool is_migrate_movable(int mt)
@@ -98,7 +101,18 @@ extern int page_group_by_mobility_disabled;
 struct free_area {
 	struct list_head	free_list[MIGRATE_TYPES];
 	unsigned long		nr_free;
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+	unsigned long		free_mt[MIGRATE_TYPES];
+#endif
 };
+
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+void count_free_migrate(struct free_area *area, struct page *page,
+			struct list_head *list, int op);
+#define FREE_LIST_ADD	0
+#define FREE_LIST_RM	1
+#define FREE_LIST_MOVE	2
+#endif
 
 /* Used for pages not on another list */
 static inline void add_to_free_area(struct page *page, struct free_area *area,
@@ -106,6 +120,10 @@ static inline void add_to_free_area(struct page *page, struct free_area *area,
 {
 	list_add(&page->lru, &area->free_list[migratetype]);
 	area->nr_free++;
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+	count_free_migrate(area, page,
+			   &area->free_list[migratetype], FREE_LIST_ADD);
+#endif
 }
 
 /* Used for pages not on another list */
@@ -114,6 +132,10 @@ static inline void add_to_free_area_tail(struct page *page, struct free_area *ar
 {
 	list_add_tail(&page->lru, &area->free_list[migratetype]);
 	area->nr_free++;
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+	count_free_migrate(area, page,
+			   &area->free_list[migratetype], FREE_LIST_ADD);
+#endif
 }
 
 #ifdef CONFIG_SHUFFLE_PAGE_ALLOCATOR
@@ -133,6 +155,10 @@ static inline void move_to_free_area(struct page *page, struct free_area *area,
 			     int migratetype)
 {
 	list_move(&page->lru, &area->free_list[migratetype]);
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+	count_free_migrate(area, page,
+			   &area->free_list[migratetype], FREE_LIST_MOVE);
+#endif
 }
 
 static inline struct page *get_page_from_free_area(struct free_area *area,
@@ -149,6 +175,10 @@ static inline void del_page_from_free_area(struct page *page,
 	__ClearPageBuddy(page);
 	set_page_private(page, 0);
 	area->nr_free--;
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+	count_free_migrate(area, page,
+			   NULL, FREE_LIST_RM);
+#endif
 }
 
 static inline bool free_area_empty(struct free_area *area, int migratetype)
@@ -200,12 +230,21 @@ enum zone_stat_item {
 	NR_MLOCK,		/* mlock()ed pages found and moved off LRU */
 	NR_PAGETABLE,		/* used for pagetables */
 	NR_KERNEL_STACK_KB,	/* measured in KiB */
+#if IS_ENABLED(CONFIG_SHADOW_CALL_STACK)
+	NR_KERNEL_SCS_BYTES,	/* measured in bytes */
+#endif
 	/* Second 128 byte cacheline */
 	NR_BOUNCE,
-#if IS_ENABLED(CONFIG_ZSMALLOC)
 	NR_ZSPAGES,		/* allocated in zsmalloc */
-#endif
 	NR_FREE_CMA_PAGES,
+#ifdef CONFIG_AMLOGIC_CMA
+	NR_INACTIVE_ANON_CMA,	/* must match order of LRU_[IN]ACTIVE */
+	NR_ACTIVE_ANON_CMA,
+	NR_INACTIVE_FILE_CMA,
+	NR_ACTIVE_FILE_CMA,
+	NR_UNEVICTABLE_FILE_CMA,
+	NR_CMA_ISOLATED,	/* cma isolate */
+#endif /* CONFIG_AMLOGIC_CMA */
 	NR_VM_ZONE_STAT_ITEMS };
 
 enum node_stat_item {
@@ -217,6 +256,9 @@ enum node_stat_item {
 	NR_UNEVICTABLE,		/*  "     "     "   "       "         */
 	NR_SLAB_RECLAIMABLE,
 	NR_SLAB_UNRECLAIMABLE,
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+	NR_SLAB_UNRECLAIMABLE_O,
+#endif
 	NR_ISOLATED_ANON,	/* Temporary isolated pages from anon lru */
 	NR_ISOLATED_FILE,	/* Temporary isolated pages from file lru */
 	WORKINGSET_NODES,
@@ -282,22 +324,21 @@ static inline int is_active_lru(enum lru_list lru)
 	return (lru == LRU_ACTIVE_ANON || lru == LRU_ACTIVE_FILE);
 }
 
-struct zone_reclaim_stat {
-	/*
-	 * The pageout code in vmscan.c keeps track of how many of the
-	 * mem/swap backed and file backed pages are referenced.
-	 * The higher the rotated/scanned ratio, the more valuable
-	 * that cache is.
-	 *
-	 * The anon LRU stats live in [0], file LRU stats in [1]
-	 */
-	unsigned long		recent_rotated[2];
-	unsigned long		recent_scanned[2];
+enum lruvec_flags {
+	LRUVEC_CONGESTED,		/* lruvec has many dirty pages
+					 * backed by a congested BDI
+					 */
 };
 
 struct lruvec {
 	struct list_head		lists[NR_LRU_LISTS];
-	struct zone_reclaim_stat	reclaim_stat;
+	/*
+	 * These track the cost of reclaiming one LRU - file or anon -
+	 * over the other. As the observed cost of reclaiming one LRU
+	 * increases, the reclaim scan balance tips toward the other.
+	 */
+	unsigned long			anon_cost;
+	unsigned long			file_cost;
 	/* Evictions & activations on the inactive file list */
 	atomic_long_t			inactive_age;
 	/* Refaults at the time of last reclaim cycle */
@@ -440,6 +481,10 @@ struct zone {
 	struct pglist_data	*zone_pgdat;
 	struct per_cpu_pageset __percpu *pageset;
 
+#ifdef CONFIG_CMA
+	bool			cma_alloc;
+#endif
+
 #ifndef CONFIG_SPARSEMEM
 	/*
 	 * Flags for a pageblock_nr_pages block. See pageblock-flags.h.
@@ -561,6 +606,11 @@ struct zone {
 	/* Zone statistics */
 	atomic_long_t		vm_stat[NR_VM_ZONE_STAT_ITEMS];
 	atomic_long_t		vm_numa_stat[NR_VM_NUMA_STAT_ITEMS];
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 } ____cacheline_internodealigned_in_smp;
 
 enum pgdat_flags {
@@ -771,7 +821,13 @@ typedef struct pglist_data {
 #endif
 
 	/* Fields commonly accessed by the page reclaim scanner */
-	struct lruvec		lruvec;
+
+	/*
+	 * NOTE: THIS IS UNUSED IF MEMCG IS ENABLED.
+	 *
+	 * Use mem_cgroup_lruvec() to look up lruvecs.
+	 */
+	struct lruvec		__lruvec;
 
 	unsigned long		flags;
 
@@ -793,11 +849,6 @@ typedef struct pglist_data {
 
 #define node_start_pfn(nid)	(NODE_DATA(nid)->node_start_pfn)
 #define node_end_pfn(nid) pgdat_end_pfn(NODE_DATA(nid))
-
-static inline struct lruvec *node_lruvec(struct pglist_data *pgdat)
-{
-	return &pgdat->lruvec;
-}
 
 static inline unsigned long pgdat_end_pfn(pg_data_t *pgdat)
 {
@@ -841,7 +892,7 @@ static inline struct pglist_data *lruvec_pgdat(struct lruvec *lruvec)
 #ifdef CONFIG_MEMCG
 	return lruvec->pgdat;
 #else
-	return container_of(lruvec, struct pglist_data, lruvec);
+	return container_of(lruvec, struct pglist_data, __lruvec);
 #endif
 }
 
@@ -956,6 +1007,8 @@ static inline int is_highmem(struct zone *zone)
 /* These two functions are used to setup the per zone pages min values */
 struct ctl_table;
 int min_free_kbytes_sysctl_handler(struct ctl_table *, int,
+					void __user *, size_t *, loff_t *);
+int extra_free_kbytes_sysctl_handler(struct ctl_table *, int,
 					void __user *, size_t *, loff_t *);
 int watermark_boost_factor_sysctl_handler(struct ctl_table *, int,
 					void __user *, size_t *, loff_t *);
@@ -1426,6 +1479,9 @@ struct mminit_pfnnid_cache {
 
 void memory_present(int nid, unsigned long start, unsigned long end);
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+#define pfn_valid_within(pfn) pfn_valid(pfn)
+#else
 /*
  * If it is possible to have holes within a MAX_ORDER_NR_PAGES, then we
  * need to check pfn validity within that MAX_ORDER_NR_PAGES block.
@@ -1436,6 +1492,7 @@ void memory_present(int nid, unsigned long start, unsigned long end);
 #define pfn_valid_within(pfn) pfn_valid(pfn)
 #else
 #define pfn_valid_within(pfn) (1)
+#endif
 #endif
 
 #endif /* !__GENERATING_BOUNDS.H */

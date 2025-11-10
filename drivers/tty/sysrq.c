@@ -54,6 +54,8 @@
 #include <asm/ptrace.h>
 #include <asm/irq_regs.h>
 
+#include <trace/hooks/sysrqcrash.h>
+
 /* Whether we react on sysrq keys or just ignore them */
 static int __read_mostly sysrq_enabled = CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE;
 static bool __read_mostly sysrq_always_enabled;
@@ -137,6 +139,8 @@ static void sysrq_handle_crash(int key)
 	/* release the RCU read lock before crashing */
 	rcu_read_unlock();
 
+	trace_android_vh_sysrq_crash(current);
+
 	panic("sysrq triggered crash\n");
 }
 static struct sysrq_key_op sysrq_crash_op = {
@@ -145,6 +149,26 @@ static struct sysrq_key_op sysrq_crash_op = {
 	.action_msg	= "Trigger a crash",
 	.enable_mask	= SYSRQ_ENABLE_DUMP,
 };
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+static DEFINE_SPINLOCK(wdt_lock);
+static void sysrq_handle_wdt_sw_rst(int key)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&wdt_lock, flags);
+	while (1)
+		;
+	/* wait for wdt fiq to kick in. */
+}
+
+static struct sysrq_key_op sysrq_wdt_sw_op = {
+	.handler        = sysrq_handle_wdt_sw_rst,
+	.help_msg       = "dis intr to trigger wdt rst(x)",
+	.action_msg     = "Trigger a sw wdt reset",
+	.enable_mask    = SYSRQ_ENABLE_DUMP,
+};
+#endif
 
 static void sysrq_handle_reboot(int key)
 {
@@ -480,7 +504,9 @@ static struct sysrq_key_op *sysrq_key_table[36] = {
 	/* x: May be registered on mips for TLB dump */
 	/* x: May be registered on ppc/powerpc for xmon */
 	/* x: May be registered on sparc64 for global PMU dump */
-	NULL,				/* x */
+#ifdef CONFIG_AMLOGIC_MODIFY
+	&sysrq_wdt_sw_op,				/* x */
+#endif
 	/* y: May be registered on sparc64 for global register dump */
 	NULL,				/* y */
 	&sysrq_ftrace_dump_op,		/* z */

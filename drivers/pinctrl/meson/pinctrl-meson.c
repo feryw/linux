@@ -56,6 +56,30 @@
 #include "../pinctrl-utils.h"
 #include "pinctrl-meson.h"
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+static int meson_memory_duplicate(struct platform_device *pdev, void **addr,
+				  size_t n, size_t size)
+{
+	void *mem;
+
+	if (!(*addr))
+		return -EINVAL;
+
+	mem = devm_kzalloc(&pdev->dev, size * n, GFP_KERNEL);
+	if (!mem)
+		return -ENOMEM;
+
+	memcpy(mem, *addr, size * n);
+	*addr = mem;
+
+	return 0;
+};
+#endif
+
+static const unsigned int meson_bit_strides[] = {
+	1, 1, 1, 1, 1, 2, 1
+};
+
 /**
  * meson_get_bank() - find the bank containing a given pin
  *
@@ -96,8 +120,9 @@ static void meson_calc_reg_and_bit(struct meson_bank *bank, unsigned int pin,
 {
 	struct meson_reg_desc *desc = &bank->regs[reg_type];
 
-	*reg = desc->reg * 4;
-	*bit = desc->bit + pin - bank->first;
+	*bit = (desc->bit + pin - bank->first) * meson_bit_strides[reg_type];
+	*reg = (desc->reg + (*bit / 32)) * 4;
+	*bit &= 0x1f;
 }
 
 static int meson_get_groups_count(struct pinctrl_dev *pcdev)
@@ -147,6 +172,7 @@ int meson_pmx_get_funcs_count(struct pinctrl_dev *pcdev)
 
 	return pc->data->num_funcs;
 }
+EXPORT_SYMBOL(meson_pmx_get_funcs_count);
 
 const char *meson_pmx_get_func_name(struct pinctrl_dev *pcdev,
 				    unsigned selector)
@@ -155,6 +181,7 @@ const char *meson_pmx_get_func_name(struct pinctrl_dev *pcdev,
 
 	return pc->data->funcs[selector].name;
 }
+EXPORT_SYMBOL(meson_pmx_get_func_name);
 
 int meson_pmx_get_groups(struct pinctrl_dev *pcdev, unsigned selector,
 			 const char * const **groups,
@@ -167,6 +194,7 @@ int meson_pmx_get_groups(struct pinctrl_dev *pcdev, unsigned selector,
 
 	return 0;
 }
+EXPORT_SYMBOL(meson_pmx_get_groups);
 
 static int meson_pinconf_set_gpio_bit(struct meson_pinctrl *pc,
 				      unsigned int pin,
@@ -243,11 +271,19 @@ static int meson_pinconf_set_output_drive(struct meson_pinctrl *pc,
 {
 	int ret;
 
+#ifndef CONFIG_AMLOGIC_MODIFY
 	ret = meson_pinconf_set_output(pc, pin, true);
 	if (ret)
 		return ret;
 
 	return meson_pinconf_set_drive(pc, pin, high);
+#else
+	ret = meson_pinconf_set_drive(pc, pin, high);
+	if (ret)
+		return ret;
+
+	return meson_pinconf_set_output(pc, pin, true);
+#endif
 }
 
 static int meson_pinconf_disable_bias(struct meson_pinctrl *pc,
@@ -314,7 +350,6 @@ static int meson_pinconf_set_drive_strength(struct meson_pinctrl *pc,
 		return ret;
 
 	meson_calc_reg_and_bit(bank, pin, REG_DS, &reg, &bit);
-	bit = bit << 1;
 
 	if (drive_strength_ua <= 500) {
 		ds_val = MESON_PINCONF_DRV_500UA;
@@ -351,6 +386,9 @@ static int meson_pinconf_set(struct pinctrl_dev *pcdev, unsigned int pin,
 
 		switch (param) {
 		case PIN_CONFIG_DRIVE_STRENGTH_UA:
+#ifdef CONFIG_AMLOGIC_MODIFY
+		case PIN_CONFIG_INPUT_ENABLE:
+#endif
 		case PIN_CONFIG_OUTPUT_ENABLE:
 		case PIN_CONFIG_OUTPUT:
 			arg = pinconf_to_config_argument(configs[i]);
@@ -379,6 +417,11 @@ static int meson_pinconf_set(struct pinctrl_dev *pcdev, unsigned int pin,
 		case PIN_CONFIG_OUTPUT:
 			ret = meson_pinconf_set_output_drive(pc, pin, arg);
 			break;
+#ifdef CONFIG_AMLOGIC_MODIFY
+		case PIN_CONFIG_INPUT_ENABLE:
+			ret = meson_pinconf_set_output(pc, pin, !arg);
+			break;
+#endif
 		default:
 			ret = -ENOTSUPP;
 		}
@@ -441,7 +484,6 @@ static int meson_pinconf_get_drive_strength(struct meson_pinctrl *pc,
 		return ret;
 
 	meson_calc_reg_and_bit(bank, pin, REG_DS, &reg, &bit);
-	bit = bit << 1;
 
 	ret = regmap_read(pc->reg_ds, reg, &val);
 	if (ret)
@@ -549,6 +591,18 @@ static const struct pinconf_ops meson_pinconf_ops = {
 	.is_generic		= true,
 };
 
+static int meson_gpio_get_direction(struct gpio_chip *chip, unsigned gpio)
+{
+	struct meson_pinctrl *pc = gpiochip_get_data(chip);
+	int ret;
+
+	ret = meson_pinconf_get_output(pc, gpio);
+	if (ret < 0)
+		return ret;
+
+	return ret ? GPIO_LINE_DIRECTION_OUT : GPIO_LINE_DIRECTION_IN;
+}
+
 static int meson_gpio_direction_input(struct gpio_chip *chip, unsigned gpio)
 {
 	return meson_pinconf_set_output(gpiochip_get_data(chip), gpio, false);
@@ -583,18 +637,65 @@ static int meson_gpio_get(struct gpio_chip *chip, unsigned gpio)
 	return !!(val & BIT(bit));
 }
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+static int meson_gpio_to_irq(struct gpio_chip *chip, unsigned int gpio)
+{
+	struct meson_pinctrl *pc = gpiochip_get_data(chip);
+	struct meson_bank *bank;
+	struct irq_fwspec fwspec;
+	int hwirq;
+
+	if (meson_get_bank(pc, gpio, &bank))
+		return -EINVAL;
+
+	if (bank->irq_first < 0) {
+		dev_warn(pc->dev, "no support irq for pin[%d]\n", gpio);
+		return -EINVAL;
+	}
+
+	if (!pc->of_irq) {
+		dev_err(pc->dev, "invalid device node of gpio INTC\n");
+		return -EINVAL;
+	}
+
+	hwirq = gpio - bank->first + bank->irq_first;
+
+	fwspec.fwnode = of_node_to_fwnode(pc->of_irq);
+	fwspec.param_count = 2;
+	fwspec.param[0] = hwirq;
+	fwspec.param[1] = IRQ_TYPE_NONE;
+
+	return irq_create_fwspec_mapping(&fwspec);
+}
+#endif
+
 static int meson_gpiolib_register(struct meson_pinctrl *pc)
 {
 	int ret;
+#ifdef CONFIG_AMLOGIC_MODIFY
+	const char **names;
+	const struct pinctrl_pin_desc *pins;
+	int i;
+#endif
 
 	pc->chip.label = pc->data->name;
 	pc->chip.parent = pc->dev;
 	pc->chip.request = gpiochip_generic_request;
 	pc->chip.free = gpiochip_generic_free;
+	pc->chip.get_direction = meson_gpio_get_direction;
 	pc->chip.direction_input = meson_gpio_direction_input;
 	pc->chip.direction_output = meson_gpio_direction_output;
 	pc->chip.get = meson_gpio_get;
 	pc->chip.set = meson_gpio_set;
+#ifdef CONFIG_AMLOGIC_MODIFY
+	pc->chip.to_irq = meson_gpio_to_irq;
+	pc->chip.set_config = gpiochip_generic_config;
+	names = kcalloc(pc->desc.npins, sizeof(char *), GFP_KERNEL);
+	pins = pc->desc.pins;
+	for (i = 0; i < pc->desc.npins; i++)
+		names[pins[i].number] = pins[i].name;
+	pc->chip.names = (const char * const *)names;
+#endif
 	pc->chip.base = -1;
 	pc->chip.ngpio = pc->data->num_pins;
 	pc->chip.can_sleep = false;
@@ -602,6 +703,16 @@ static int meson_gpiolib_register(struct meson_pinctrl *pc)
 	pc->chip.of_gpio_n_cells = 2;
 
 	ret = gpiochip_add_data(&pc->chip, pc);
+#ifdef CONFIG_AMLOGIC_MODIFY
+	/* pin->chip.names will be assigned to each gpio discriptor' name
+	 * member after gpiochip_add_data. To keep node name consistency when
+	 * use sysfs to export gpio, pc->chip.name need to be cleared also see
+	 * gpiod_export->device_create_with_groups.
+	 */
+	kfree(names);
+	names = NULL;
+	pc->chip.names = NULL;
+#endif
 	if (ret) {
 		dev_err(pc->dev, "can't add gpio chip %s\n",
 			pc->data->name);
@@ -626,7 +737,7 @@ static struct regmap *meson_map_resource(struct meson_pinctrl *pc,
 
 	i = of_property_match_string(node, "reg-names", name);
 	if (of_address_to_resource(node, i, &res))
-		return ERR_PTR(-ENOENT);
+		return NULL;
 
 	base = devm_ioremap_resource(pc->dev, &res);
 	if (IS_ERR(base))
@@ -665,33 +776,81 @@ static int meson_pinctrl_parse_dt(struct meson_pinctrl *pc,
 
 	pc->of_node = gpio_np;
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+	pc->of_irq = of_find_compatible_node(NULL,
+					     NULL,
+					     "amlogic,meson-gpio-intc-ext");
+	if (!pc->of_irq)
+		pc->of_irq = of_find_compatible_node(NULL,
+						     NULL,
+						     "amlogic,meson-gpio-intc");
+#endif
+
 	pc->reg_mux = meson_map_resource(pc, gpio_np, "mux");
-	if (IS_ERR(pc->reg_mux)) {
+	if (IS_ERR_OR_NULL(pc->reg_mux)) {
 		dev_err(pc->dev, "mux registers not found\n");
-		return PTR_ERR(pc->reg_mux);
+		return pc->reg_mux ? PTR_ERR(pc->reg_mux) : -ENOENT;
 	}
 
 	pc->reg_gpio = meson_map_resource(pc, gpio_np, "gpio");
-	if (IS_ERR(pc->reg_gpio)) {
+	if (IS_ERR_OR_NULL(pc->reg_gpio)) {
 		dev_err(pc->dev, "gpio registers not found\n");
-		return PTR_ERR(pc->reg_gpio);
+		return pc->reg_gpio ? PTR_ERR(pc->reg_gpio) : -ENOENT;
 	}
 
 	pc->reg_pull = meson_map_resource(pc, gpio_np, "pull");
-	/* Use gpio region if pull one is not present */
 	if (IS_ERR(pc->reg_pull))
-		pc->reg_pull = pc->reg_gpio;
+		pc->reg_pull = NULL;
 
 	pc->reg_pullen = meson_map_resource(pc, gpio_np, "pull-enable");
-	/* Use pull region if pull-enable one is not present */
 	if (IS_ERR(pc->reg_pullen))
-		pc->reg_pullen = pc->reg_pull;
+		pc->reg_pullen = NULL;
 
 	pc->reg_ds = meson_map_resource(pc, gpio_np, "ds");
 	if (IS_ERR(pc->reg_ds)) {
 		dev_dbg(pc->dev, "ds registers not found - skipping\n");
 		pc->reg_ds = NULL;
 	}
+
+	if (pc->data->parse_dt)
+		return pc->data->parse_dt(pc);
+
+	return 0;
+}
+
+int meson8_aobus_parse_dt_extra(struct meson_pinctrl *pc)
+{
+	if (!pc->reg_pull)
+		return -EINVAL;
+
+	pc->reg_pullen = pc->reg_pull;
+
+	return 0;
+}
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+/*g12a/b/sm1/tm2/t5/t5d/ like old platform */
+int meson_g12a_aobus_parse_dt_extra(struct meson_pinctrl *pc)
+{
+	pc->reg_pull = pc->reg_gpio;
+	pc->reg_pullen = pc->reg_gpio;
+
+	return 0;
+}
+
+int meson_t5w_workaround_parse_dt_extra(struct meson_pinctrl *pc)
+{
+	pc->reg_ds = pc->reg_mux;
+
+	return 0;
+}
+#endif
+
+int meson_a1_parse_dt_extra(struct meson_pinctrl *pc)
+{
+	pc->reg_pull = pc->reg_gpio;
+	pc->reg_pullen = pc->reg_gpio;
+	pc->reg_ds = pc->reg_gpio;
 
 	return 0;
 }
@@ -712,7 +871,17 @@ int meson_pinctrl_probe(struct platform_device *pdev)
 	ret = meson_pinctrl_parse_dt(pc, dev->of_node);
 	if (ret)
 		return ret;
+#ifdef CONFIG_AMLOGIC_MODIFY
+	ret = meson_memory_duplicate(pdev, (void **)&pc->data->groups, pc->data->num_groups,
+				     sizeof(struct meson_pmx_group));
+	if (ret)
+		return ret;
 
+	ret = meson_memory_duplicate(pdev, (void **)&pc->data->funcs, pc->data->num_funcs,
+				     sizeof(struct meson_pmx_func));
+	if (ret)
+		return ret;
+#endif
 	pc->desc.name		= "pinctrl-meson";
 	pc->desc.owner		= THIS_MODULE;
 	pc->desc.pctlops	= &meson_pctrl_ops;
@@ -729,3 +898,4 @@ int meson_pinctrl_probe(struct platform_device *pdev)
 
 	return meson_gpiolib_register(pc);
 }
+EXPORT_SYMBOL(meson_pinctrl_probe);

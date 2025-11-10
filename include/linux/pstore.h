@@ -96,6 +96,12 @@ struct pstore_record {
  *
  * @read_mutex:	serializes @open, @read, @close, and @erase callbacks
  * @flags:	bitfield of frontends the backend can accept writes for
+ * @max_reason:	Used when PSTORE_FLAGS_DMESG is set. Contains the
+ *		kmsg_dump_reason enum value. KMSG_DUMP_UNDEF means
+ *		"use existing kmsg_dump() filtering, based on the
+ *		printk.always_kmsg_dump boot param" (which is either
+ *		KMSG_DUMP_OOPS when false, or KMSG_DUMP_MAX when
+ *		true); see printk.always_kmsg_dump for more details.
  * @data:	backend-private pointer passed back during callbacks
  *
  * Callbacks:
@@ -170,7 +176,7 @@ struct pstore_record {
  */
 struct pstore_info {
 	struct module	*owner;
-	char		*name;
+	const char	*name;
 
 	struct semaphore buf_lock;
 	char		*buf;
@@ -179,6 +185,7 @@ struct pstore_info {
 	struct mutex	read_mutex;
 
 	int		flags;
+	int		max_reason;
 	void		*data;
 
 	int		(*open)(struct pstore_info *psi);
@@ -203,7 +210,29 @@ struct pstore_ftrace_record {
 	unsigned long ip;
 	unsigned long parent_ip;
 	u64 ts;
+#ifdef CONFIG_AMLOGIC_DEBUG_FTRACE_PSTORE
+	int pid;
+	union {
+		char name[16];
+		struct {
+			unsigned long val1;
+			unsigned long val2;
+		};
+	};
+	unsigned long long time;
+	unsigned char comm[8];
+	struct {
+		unsigned int flag:30;
+		unsigned int in_irq:1;
+		unsigned int phys_addr:1;
+	};
+#endif
 };
+
+#ifdef CONFIG_AMLOGIC_DEBUG_FTRACE_PSTORE
+void notrace pstore_ftrace_dump(struct pstore_ftrace_record *rec,
+				struct seq_file *s);
+#endif
 
 /*
  * ftrace related stuff: Both backends and frontends need these so expose

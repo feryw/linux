@@ -40,6 +40,9 @@
 #include <linux/sizes.h>
 #include <asm/tlb.h>
 #include <asm/alternative.h>
+#ifdef CONFIG_AMLOGIC_PCIE
+#include <linux/amlogic/tee.h>
+#endif
 
 /*
  * We need to be able to catch inadvertent references to memstart_addr
@@ -106,6 +109,10 @@ static void __init reserve_crashkernel(void)
 
 	crashk_res.start = crash_base;
 	crashk_res.end = crash_base + crash_size - 1;
+
+#ifdef CONFIG_AMLOGIC_KDUMP
+	strcat(boot_command_line, " androidboot.kdump=1 ");
+#endif
 }
 #else
 static void __init reserve_crashkernel(void)
@@ -535,6 +542,9 @@ static void __init free_unused_memmap(void)
  */
 void __init mem_init(void)
 {
+#ifdef CONFIG_AMLOGIC_MEM_DEBUG
+	char *buf = NULL;
+#endif
 	if (swiotlb_force == SWIOTLB_FORCE ||
 	    max_pfn > (arm64_dma_phys_limit >> PAGE_SHIFT))
 		swiotlb_init(1);
@@ -551,6 +561,16 @@ void __init mem_init(void)
 
 	mem_init_print_info(NULL);
 
+#ifdef CONFIG_AMLOGIC_MEM_DEBUG
+	buf = (void *)__get_free_page(GFP_KERNEL);
+	if (!buf) {
+		pr_err("%s alloc buffer failed\n", __func__);
+	} else {
+		dump_mem_layout(buf);
+		pr_notice("%s\n", buf);
+		free_page((unsigned long)buf);
+	}
+#endif
 	/*
 	 * Check boundaries twice: Some fundamental inconsistencies can be
 	 * detected at build time already.
@@ -571,6 +591,12 @@ void __init mem_init(void)
 
 void free_initmem(void)
 {
+#ifdef CONFIG_AMLOGIC_PCIE
+	if (keep_init) {
+		pr_emerg("keep init section due to PCI protect\n");
+		return;
+	}
+#endif
 	free_reserved_area(lm_alias(__init_begin),
 			   lm_alias(__init_end),
 			   0, "unused kernel");

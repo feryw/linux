@@ -30,7 +30,9 @@
 #include <linux/poll.h>
 #include <linux/wait.h>
 #include <linux/memcontrol.h>
+#ifndef CONFIG_AMLOGIC_ANDROIDP
 #include <linux/security.h>
+#endif
 
 #include "inotify.h"
 #include "../fdinfo.h"
@@ -332,8 +334,13 @@ static const struct file_operations inotify_fops = {
 /*
  * find_inode - resolve a user-given path to a specific inode
  */
-static int inotify_find_inode(const char __user *dirname, struct path *path,
-						unsigned int flags, __u64 mask)
+#ifdef CONFIG_AMLOGIC_ANDROIDP
+
+static int inotify_find_inode(const char __user *dirname, struct path *path, unsigned int flags)
+#else
+static int inotify_find_inode(const char __user *dirname, struct path *path, unsigned int flags,
+				 __u64 mask)
+#endif
 {
 	int error;
 
@@ -341,16 +348,17 @@ static int inotify_find_inode(const char __user *dirname, struct path *path,
 	if (error)
 		return error;
 	/* you can only watch an inode if you have read permissions on it */
-	error = inode_permission(path->dentry->d_inode, MAY_READ);
+	error = inode_permission2(path->mnt, path->dentry->d_inode, MAY_READ);
 	if (error) {
 		path_put(path);
 		return error;
 	}
+#ifndef CONFIG_AMLOGIC_ANDROIDP
 	error = security_path_notify(path, mask,
-				FSNOTIFY_OBJ_TYPE_INODE);
+			FSNOTIFY_OBJ_TYPE_INODE);
 	if (error)
 		path_put(path);
-
+#endif
 	return error;
 }
 
@@ -701,6 +709,8 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
 	struct fsnotify_group *group;
 	struct inode *inode;
 	struct path path;
+	struct path alteredpath;
+	struct path *canonical_path = &path;
 	struct fd f;
 	int ret;
 	unsigned flags = 0;
@@ -741,19 +751,32 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
 		flags |= LOOKUP_FOLLOW;
 	if (mask & IN_ONLYDIR)
 		flags |= LOOKUP_DIRECTORY;
-
+#ifdef CONFIG_AMLOGIC_ANDROIDP
+	ret = inotify_find_inode(pathname, &path, flags);
+#else
 	ret = inotify_find_inode(pathname, &path, flags,
-			(mask & IN_ALL_EVENTS));
+				(mask & IN_ALL_EVENTS));
+#endif
 	if (ret)
 		goto fput_and_out;
 
+	/* support stacked filesystems */
+	if (path.dentry && path.dentry->d_op) {
+		if (path.dentry->d_op->d_canonical_path) {
+			path.dentry->d_op->d_canonical_path(&path,
+							    &alteredpath);
+			canonical_path = &alteredpath;
+			path_put(&path);
+		}
+	}
+
 	/* inode held in place by reference to path; group by fget on fd */
-	inode = path.dentry->d_inode;
+	inode = canonical_path->dentry->d_inode;
 	group = f.file->private_data;
 
 	/* create/update an inode mark */
 	ret = inotify_update_watch(group, inode, mask);
-	path_put(&path);
+	path_put(canonical_path);
 fput_and_out:
 	fdput(f);
 	return ret;

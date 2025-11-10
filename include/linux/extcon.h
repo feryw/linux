@@ -69,6 +69,15 @@
 #define EXTCON_JACK_SPDIF_IN	26	/* Sony Philips Digital InterFace */
 #define EXTCON_JACK_SPDIF_OUT	27
 
+#ifdef CONFIG_AMLOGIC_SND_SOC_AUGE
+#define EXTCON_SPDIFIN_SAMPLERATE 28/*  spdif in sample rate changed */
+#define EXTCON_SPDIFIN_AUDIOTYPE  29/*  spdif in PcPd detect */
+#define EXTCON_EARCRX_ATNDTYP_ARC  30   /*  attended type, RX ARC */
+#define EXTCON_EARCRX_ATNDTYP_EARC 31   /*  attended type, RX eARC */
+#define EXTCON_EARCTX_ATNDTYP_ARC  32   /*  attended type, TX ARC */
+#define EXTCON_EARCTX_ATNDTYP_EARC 33   /*  attended type, TX eARC */
+#endif
+
 /* Display external connector */
 #define EXTCON_DISP_HDMI	40	/* High-Definition Multimedia Interface */
 #define EXTCON_DISP_MHL		41	/* Mobile High-Definition Link */
@@ -308,6 +317,11 @@ static inline struct extcon_dev *extcon_get_edev_by_phandle(struct device *dev,
 				int index)
 {
 	return ERR_PTR(-ENODEV);
+}
+
+static inline const char *extcon_get_edev_name(struct extcon_dev *edev)
+{
+	return NULL;
 }
 #endif /* CONFIG_EXTCON */
 

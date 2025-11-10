@@ -1,0 +1,139 @@
+/{
+	coreelec;
+	/delete-property/ amlogic-dt-id;
+
+	reserved-memory {
+		codec_mm_cma:linux,codec_mm_cma {
+			size = <0x0 0x2fc00000>;
+		};
+
+		ion_fb_reserved:linux,ion-fb {
+			/* 1920x1080x4x4 round up 4M align */
+			size = <0x0 0x11000000>;
+		};
+
+		logo_reserved:linux,meson-fb {
+			compatible = "shared-dma-pool";
+			reusable;
+		};
+	};
+
+	gpioleds {
+		compatible = "gpio-leds";
+		status = "okay";
+	};
+
+	/delete-node/ custom_maps;
+	/delete-node/ ir@8000;
+	/delete-node/ optee;
+	/delete-node/ adc_keypad;
+
+	meson-ir {
+		compatible = "amlogic,meson6-ir";
+		status = "okay";
+		/* Multi-format IR controller */
+		reg = <0x0 0xfe084040 0x00 0xa4>;
+		interrupts = <GIC_SPI 22 IRQ_TYPE_EDGE_RISING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&remote_pins>;
+		pulse-inverted;
+		wakeup_protocol = <9>; /* force default NEC by <include/uapi/linux/lirc.h> */
+	};
+
+	meson-remote {
+		compatible = "amlogic, meson-ir";
+		status = "okay";
+		reg = <0x0 0xfe084040 0x00 0xa4>, /*Multi-format IR controller*/
+		      <0x0 0xfe084000 0x00 0x20>; /*Legacy IR controller*/
+		interrupts = <GIC_SPI 22 IRQ_TYPE_EDGE_RISING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&remote_pins>;
+		protocol = <REMOTE_TYPE_NEC>;
+		max_frame_time = <200>; /*set software decoder max frame time*/
+	};
+
+	openvfd {
+		compatible = "open,vfd";
+		dev_name = "openvfd";
+		status = "okay";
+	};
+
+	amvideocap {
+		compatible = "amlogic, amvideocap";
+		dev_name = "amvideocap.0";
+		status = "okay";
+		max_size = <24>; //24M
+	};
+
+	dummy_venc: dummy_venc {
+		status = "disabled";
+	};
+
+	/delete-node/ partitions;
+	/delete-node/ firmware;
+
+	dvb-extern {
+		status = "disabled";
+	};
+
+	dvb-demux {
+		status = "disabled";
+	};
+
+	jtag {
+		status = "disabled";
+	};
+};
+
+&aocec {
+	/delete-property/ arc_port_mask;
+	cec_log_en = <0>;
+};
+
+&audiobus {
+	aml_i2s2hdmi: i2s2hdmi {
+		#sound-dai-cells = <0>;
+
+		dai-tdm-lane-slot-mask-in = <0 0 0 0>;
+		dai-tdm-lane-slot-mask-out = <1 1 1 1>;
+		dai-tdm-clk-sel = <2>;
+
+		i2s2hdmi = <1>;
+		status = "okay";
+	};
+
+	/delete-node/ tdma;
+	/delete-node/ tdm@0;
+	/delete-node/ tdm@3;
+	/delete-node/ pdm;
+	/delete-node/ extn;
+	/delete-node/ effect;
+};
+
+&amhdmitx {
+	/delete-property/ hdcp_ctl_lvl;
+	/delete-property/ vrr_type;
+	custom_edid = "";
+};
+
+&aml_wifi {
+	dhd_static_buf;
+};
+
+&ext_mdio {
+	external_phy: ethernet-phy@0 {
+		/delete-property/ reg;
+	};
+};
+
+&ethmac {
+	wol = <0>;
+};
+
+&drm_subsystem {
+	fbdev_sizes = <4096 2160 4096 4320 32>;
+};
+
+&drm_amcvbsout {
+	status = "disabled";
+};

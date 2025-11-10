@@ -26,6 +26,9 @@
 
 #include <asm/irq_regs.h>
 #include <linux/kvm_para.h>
+#ifdef CONFIG_AMLOGIC_DEBUG_LOCKUP
+#include <linux/amlogic/debug_lockup.h>
+#endif
 
 static DEFINE_MUTEX(watchdog_mutex);
 
@@ -174,10 +177,10 @@ static DEFINE_PER_CPU(unsigned long, watchdog_touch_ts);
 static DEFINE_PER_CPU(struct hrtimer, watchdog_hrtimer);
 static DEFINE_PER_CPU(bool, softlockup_touch_sync);
 static DEFINE_PER_CPU(bool, soft_watchdog_warn);
-static DEFINE_PER_CPU(unsigned long, hrtimer_interrupts);
+DEFINE_PER_CPU(unsigned long, hrtimer_interrupts);
 static DEFINE_PER_CPU(unsigned long, soft_lockup_hrtimer_cnt);
 static DEFINE_PER_CPU(struct task_struct *, softlockup_task_ptr_saved);
-static DEFINE_PER_CPU(unsigned long, hrtimer_interrupts_saved);
+DEFINE_PER_CPU(unsigned long, hrtimer_interrupts_saved);
 static unsigned long soft_lockup_nmi_warn;
 
 static int __init softlockup_panic_setup(char *str)
@@ -252,7 +255,11 @@ static void set_sample_period(void)
 	 * and hard thresholds) to increment before the
 	 * hardlockup detector generates a warning
 	 */
+#ifdef CONFIG_AMLOGIC_MODIFY
+	sample_period = 1 * (u64)NSEC_PER_SEC;
+#else
 	sample_period = get_softlockup_thresh() * ((u64)NSEC_PER_SEC / 5);
+#endif
 	watchdog_update_hrtimer_threshold(sample_period);
 }
 
@@ -339,6 +346,13 @@ static void watchdog_interrupt_count(void)
 	__this_cpu_inc(hrtimer_interrupts);
 }
 
+#ifdef CONFIG_AMLOGIC_DEBUG_LOCKUP
+unsigned long watchdog_get_interrupt_count_cpu(int cpu)
+{
+	return per_cpu(hrtimer_interrupts, cpu);
+}
+#endif
+
 static DEFINE_PER_CPU(struct completion, softlockup_completion);
 static DEFINE_PER_CPU(struct cpu_stop_work, softlockup_stop_work);
 
@@ -373,6 +387,11 @@ static enum hrtimer_restart watchdog_timer_fn(struct hrtimer *hrtimer)
 
 	/* kick the hardlockup detector */
 	watchdog_interrupt_count();
+
+#ifdef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
+	/* test for hardlockups on the next cpu */
+	watchdog_check_hardlockup_other_cpu();
+#endif
 
 	/* kick the softlockup detector */
 	if (completion_done(this_cpu_ptr(&softlockup_completion))) {
@@ -502,6 +521,9 @@ static void watchdog_enable(unsigned int cpu)
 	/* Enable the perf event */
 	if (watchdog_enabled & NMI_WATCHDOG_ENABLED)
 		watchdog_nmi_enable(cpu);
+#ifdef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
+	watchdog_nmi_enable(cpu);
+#endif
 }
 
 static void watchdog_disable(unsigned int cpu)

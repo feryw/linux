@@ -190,7 +190,6 @@ config BRIDGE_NETFILTER
 	depends on NETFILTER_ADVANCED
 	select NETFILTER_FAMILY_BRIDGE
 	select SKB_EXTENSIONS
-	default m
 	---help---
 	  Enabling this option will let arptables resp. iptables see bridged
 	  ARP resp. IP traffic. If you want a bridging firewall, you probably
@@ -303,6 +302,15 @@ config BPF_JIT
 	  /proc/sys/net/core/bpf_jit_enable
 	  /proc/sys/net/core/bpf_jit_harden   (optional)
 	  /proc/sys/net/core/bpf_jit_kallsyms (optional)
+
+config BPF_JIT_AMLOGIC
+	bool "enable BPF Just In Time compiler for Amlogic"
+	default y
+	depends on HAVE_CBPF_JIT || HAVE_EBPF_JIT
+	depends on MODULES
+	help
+	  real effective config  for Amlogic
+	  we should disable it in arm
 
 config BPF_STREAM_PARSER
 	bool "enable BPF STREAM_PARSER"

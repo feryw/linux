@@ -11,6 +11,8 @@
 #include <linux/regmap.h>
 #include <linux/types.h>
 
+struct meson_pinctrl;
+
 /**
  * struct meson_pmx_group - a pinmux group
  *
@@ -114,6 +116,7 @@ struct meson_pinctrl_data {
 	unsigned int num_banks;
 	const struct pinmux_ops *pmx_ops;
 	void *pmx_data;
+	int (*parse_dt)(struct meson_pinctrl *pc);
 };
 
 struct meson_pinctrl {
@@ -127,6 +130,9 @@ struct meson_pinctrl {
 	struct regmap *reg_gpio;
 	struct regmap *reg_ds;
 	struct gpio_chip chip;
+#ifdef CONFIG_AMLOGIC_MODIFY
+	struct device_node *of_irq;
+#endif
 	struct device_node *of_node;
 };
 
@@ -171,3 +177,13 @@ int meson_pmx_get_groups(struct pinctrl_dev *pcdev,
 
 /* Common probe function */
 int meson_pinctrl_probe(struct platform_device *pdev);
+/* Common ao groups extra dt parse function for SoCs before g12a  */
+int meson8_aobus_parse_dt_extra(struct meson_pinctrl *pc);
+#ifdef CONFIG_AMLOGIC_MODIFY
+/* Common ao groups extra dt parse function for SoCs g12a/b/sm1/tm2/t5d/t5 */
+int meson_g12a_aobus_parse_dt_extra(struct meson_pinctrl *pc);
+/* Only for t5w for special register layout fixup */
+int meson_t5w_workaround_parse_dt_extra(struct meson_pinctrl *pc);
+#endif
+/* Common extra dt parse function for SoCs like A1  */
+int meson_a1_parse_dt_extra(struct meson_pinctrl *pc);

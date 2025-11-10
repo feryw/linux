@@ -30,9 +30,24 @@ void hook_debug_fault_code(int nr, int (*fn)(unsigned long, unsigned int,
 			   int sig, int code, const char *name);
 
 struct mm_struct;
-extern void __show_regs(struct pt_regs *);
+#ifdef CONFIG_AMLOGIC_USER_FAULT
+void show_all_pfn(struct task_struct *task, struct pt_regs *regs);
+void show_vma(struct mm_struct *mm, unsigned long addr);
+void _dump_dmc_reg(void);
+#else
+static inline void show_all_pfn(struct task_struct *task, struct pt_regs *regs)
+{
+}
 
-extern void (*arm_pm_restart)(enum reboot_mode reboot_mode, const char *cmd);
+static inline void show_vma(struct mm_struct *mm, unsigned long addr)
+{
+}
+
+static inline void _dump_dmc_reg(void)
+{
+}
+#endif /* CONFIG_AMLOGIC_USER_FAULT */
+extern void __show_regs(struct pt_regs *);
 
 #endif	/* __ASSEMBLY__ */
 

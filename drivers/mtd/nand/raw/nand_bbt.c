@@ -65,6 +65,25 @@
 
 #include "internals.h"
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+#include <linux/amlogic/aml_mtd_nand.h>
+
+#define BBT_BLOCK_GOOD		NAND_BLOCK_GOOD
+#define BBT_BLOCK_WORN		NAND_BLOCK_BAD
+#define BBT_BLOCK_FACTORY_BAD	NAND_FACTORY_BAD
+#define BBT_BLOCK_RESERVED	0x03
+
+static inline uint8_t bbt_get_entry(struct nand_chip *chip, int block)
+{
+	return chip->bbt[block];
+}
+
+static inline void bbt_mark_entry(struct nand_chip *chip, int block,
+		uint8_t mark)
+{
+	chip->bbt[block] = mark;
+}
+#else
 #define BBT_BLOCK_GOOD		0x00
 #define BBT_BLOCK_WORN		0x01
 #define BBT_BLOCK_RESERVED	0x02
@@ -86,6 +105,7 @@ static inline void bbt_mark_entry(struct nand_chip *chip, int block,
 	uint8_t msk = (mark & BBT_ENTRY_MASK) << ((block & BBT_ENTRY_MASK) * 2);
 	chip->bbt[block >> BBT_ENTRY_SHIFT] |= msk;
 }
+#endif
 
 static int check_pattern_no_oob(uint8_t *buf, struct nand_bbt_descr *td)
 {
@@ -1425,8 +1445,25 @@ int nand_isbad_bbt(struct nand_chip *this, loff_t offs, int allowbbt)
 	switch (res) {
 	case BBT_BLOCK_GOOD:
 		return 0;
+/**
+ * During the OTA software upgrade write partition process,
+ * the code skip bad block when check bad block method return
+ * result equals to 1, in this case, we return the same result
+ * whether check result is BBT_BLOCK_WORN or BBT_BLOCK_FACTORY_BAD,
+ * otherwise, a partition write error may occur
+ */
 	case BBT_BLOCK_WORN:
+#ifdef CONFIG_AMLOGIC_MODIFY
+		pr_info("find a bad block offs 0x%08x: (block %d) 0x%02x\n",
+			(unsigned int)offs, block, res);
+#endif
 		return 1;
+#ifdef CONFIG_AMLOGIC_MODIFY
+	case BBT_BLOCK_FACTORY_BAD:
+		pr_info("find a factory bad block offs 0x%08x: (block %d) 0x%02x\n",
+			(unsigned int)offs, block, res);
+		return 1;
+#endif
 	case BBT_BLOCK_RESERVED:
 		return allowbbt ? 0 : 1;
 	}

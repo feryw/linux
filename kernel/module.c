@@ -59,6 +59,10 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/module.h>
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+#include <linux/kasan.h>
+#endif
+
 #ifndef ARCH_SHF_SMALL
 #define ARCH_SHF_SMALL 0
 #endif
@@ -86,6 +90,14 @@
 DEFINE_MUTEX(module_mutex);
 EXPORT_SYMBOL_GPL(module_mutex);
 static LIST_HEAD(modules);
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+static int ignore_check_version = 1;
+core_param(ignore_check_version, ignore_check_version, int, 0644);
+
+static int module_debug;
+core_param(module_debug, module_debug, int, 0644);
+#endif
 
 /* Work queue for freeing init sections in success case */
 static void do_free_init(struct work_struct *w);
@@ -1042,6 +1054,10 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 	/* Store the name of the last unloaded module for diagnostic purposes */
 	strlcpy(last_unloaded_module, mod->name, sizeof(last_unloaded_module));
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+	if (module_debug)
+		pr_info("remove module: %s\n", mod->name);
+#endif
 	free_module(mod);
 	/* someone could wait for the module in add_unformed_module() */
 	wake_up_all(&module_wq);
@@ -1346,7 +1362,13 @@ static int check_version(const struct load_info *info,
 bad_version:
 	pr_warn("%s: disagrees about version of symbol %s\n",
 	       info->name, symname);
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+	pr_err("please rebuild ko: %s\n", info->name);
+	return ignore_check_version;
+#else
 	return 0;
+#endif
 }
 
 static inline int check_modstruct_version(const struct load_info *info,
@@ -1994,6 +2016,14 @@ static void mod_sysfs_teardown(struct module *mod)
 }
 
 #ifdef CONFIG_ARCH_HAS_STRICT_MODULE_RWX
+#ifdef CONFIG_AMLOGIC_VMALLOC_SHRINKER
+static void module_enable_nx(const struct module *mod) { }
+static void module_enable_x(const struct module *mod) { }
+void set_all_modules_text_rw(void) { }
+void set_all_modules_text_ro(void) { }
+void module_enable_ro(const struct module *mod, bool after_init) { }
+void module_disable_ro(const struct module *mod) { }
+#else
 /*
  * LKM RO/NX protection: protect module's text/ro-data
  * from modification and any data from execution.
@@ -2137,6 +2167,7 @@ static void module_enable_x(const struct module *mod)
 	frob_text(&mod->core_layout, set_memory_x);
 	frob_text(&mod->init_layout, set_memory_x);
 }
+#endif
 #else /* !CONFIG_ARCH_HAS_STRICT_MODULE_RWX */
 static void module_enable_nx(const struct module *mod) { }
 static void module_enable_x(const struct module *mod) { }
@@ -2236,6 +2267,8 @@ void __weak module_arch_freeing_init(struct module *mod)
 {
 }
 
+static void cfi_cleanup(struct module *mod);
+
 /* Free a module, remove from lists, etc. */
 static void free_module(struct module *mod)
 {
@@ -2275,6 +2308,9 @@ static void free_module(struct module *mod)
 	synchronize_rcu();
 	mutex_unlock(&module_mutex);
 
+	/* Clean up CFI for the module. */
+	cfi_cleanup(mod);
+
 	/* This may be empty, but that's OK */
 	module_arch_freeing_init(mod);
 	module_memfree(mod->init_layout.base);
@@ -2284,6 +2320,9 @@ static void free_module(struct module *mod)
 	/* Free lock-classes; relies on the preceding sync_rcu(). */
 	lockdep_free_key_range(mod->core_layout.base, mod->core_layout.size);
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+	kasan_unpoison_shadow(mod->core_layout.base, mod->core_layout.size);
+#endif
 	/* Finally, free the core (containing the module structure) */
 	module_memfree(mod->core_layout.base);
 }
@@ -2732,18 +2771,39 @@ static bool is_core_symbol(const Elf_Sym *src, const Elf_Shdr *sechdrs,
 	    || !src->st_name)
 		return false;
 
+/* ignore all symbols of module been loaded when module_debug is not set */
+#ifdef CONFIG_AMLOGIC_MODIFY
+#ifdef CONFIG_KALLSYMS_ALL
+	if (src->st_shndx == pcpundx && module_debug)
+		return true;
+#endif /* CONFIG_KALLSYMS_ALL */
+#else /* #ifndef CONFIG_AMLOGIC_MODIFY */
 #ifdef CONFIG_KALLSYMS_ALL
 	if (src->st_shndx == pcpundx)
 		return true;
 #endif
+#endif /* CONFIG_AMLOGIC_MODIFY */
 
 	sec = sechdrs + src->st_shndx;
+#if defined CONFIG_AMLOGIC_MODIFY && defined CONFIG_KALLSYMS_ALL
+	if (!(sec->sh_flags & SHF_ALLOC) ||
+	   (!(sec->sh_flags & SHF_EXECINSTR) && !module_debug) ||
+	   (sec->sh_entsize & INIT_OFFSET_MASK))
+		return false;
+#else /*#ifndef CONFIG_AMLOGIC_MODIFY || #ifndef CONFIG_KALLSYMS_ALL */
+	if (!(sec->sh_flags & SHF_ALLOC) ||
+		!(sec->sh_flags & SHF_EXECINSTR) ||
+		(sec->sh_entsize & INIT_OFFSET_MASK))
+		return false;
+#endif
+#ifndef CONFIG_AMLOGIC_MODIFY
 	if (!(sec->sh_flags & SHF_ALLOC)
 #ifndef CONFIG_KALLSYMS_ALL
 	    || !(sec->sh_flags & SHF_EXECINSTR)
 #endif
 	    || (sec->sh_entsize & INIT_OFFSET_MASK))
 		return false;
+#endif
 
 	return true;
 }
@@ -3436,6 +3496,12 @@ static int move_module(struct module *mod, struct load_info *info)
 		mod->init_layout.base = NULL;
 
 	/* Transfer each section which specifies SHF_ALLOC */
+#ifdef CONFIG_AMLOGIC_MODIFY
+	if (module_debug)
+		pr_info("module:%s init_base:%px size:%#x core_base:%px size:%#x, final section addresses:\n",
+			mod->name, mod->init_layout.base, mod->init_layout.size,
+			mod->core_layout.base, mod->core_layout.size);
+#endif
 	pr_debug("final section addresses:\n");
 	for (i = 0; i < info->hdr->e_shnum; i++) {
 		void *dest;
@@ -3454,6 +3520,18 @@ static int move_module(struct module *mod, struct load_info *info)
 			memcpy(dest, (void *)shdr->sh_addr, shdr->sh_size);
 		/* Update sh_addr to point to copy in image. */
 		shdr->sh_addr = (unsigned long)dest;
+#ifdef CONFIG_AMLOGIC_MODIFY
+		if (module_debug) {
+			if (!strcmp(info->secstrings + shdr->sh_name, ".bss") ||
+				!strcmp(info->secstrings + shdr->sh_name, ".data") ||
+				!strcmp(info->secstrings + shdr->sh_name, ".rodata") ||
+				!strcmp(info->secstrings + shdr->sh_name, ".text") ||
+				!strcmp(info->secstrings + shdr->sh_name, ".init.text") ||
+				!strcmp(info->secstrings + shdr->sh_name, ".exit.text"))
+				pr_info("\t0x%lx %s\n",
+					(long)shdr->sh_addr, info->secstrings + shdr->sh_name);
+		}
+#endif
 		pr_debug("\t0x%lx %s\n",
 			 (long)shdr->sh_addr, info->secstrings + shdr->sh_name);
 	}
@@ -3624,6 +3702,8 @@ int __weak module_finalize(const Elf_Ehdr *hdr,
 	return 0;
 }
 
+static void cfi_init(struct module *mod);
+
 static int post_relocation(struct module *mod, const struct load_info *info)
 {
 	/* Sort exception table now relocations are done. */
@@ -3635,6 +3715,9 @@ static int post_relocation(struct module *mod, const struct load_info *info)
 
 	/* Setup kallsyms-specific fields. */
 	add_kallsyms(mod, info);
+
+	/* Setup CFI for the module. */
+	cfi_init(mod);
 
 	/* Arch-specific module finalizing. */
 	return module_finalize(info->hdr, info->sechdrs, mod);
@@ -3763,6 +3846,15 @@ static noinline int do_init_module(struct module *mod)
 	mod->init_layout.ro_size = 0;
 	mod->init_layout.ro_after_init_size = 0;
 	mod->init_layout.text_size = 0;
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+	/*
+	 * let free module init_mem synchronized, so module layout can keep
+	 * consistence after reboot, it's very important for ramoops iodump.
+	 */
+	module_memfree(mod->init_layout.base);
+	kfree(freeinit);
+#else
 	/*
 	 * We want to free module_init, but be aware that kallsyms may be
 	 * walking this with preempt disabled.  In all the failure paths, we
@@ -3778,6 +3870,7 @@ static noinline int do_init_module(struct module *mod)
 	 */
 	if (llist_add(&freeinit->node, &init_free_list))
 		schedule_work(&init_free_wq);
+#endif
 
 	mutex_unlock(&module_mutex);
 	wake_up_all(&module_wq);
@@ -3958,6 +4051,11 @@ static int load_module(struct load_info *info, const char __user *uargs,
 	 */
 	if (blacklisted(info->name)) {
 		err = -EPERM;
+#ifdef CONFIG_AMLOGIC_MODIFY
+		/* return success or andorid R will fail to boot */
+		pr_info("module_blacklist: %s\n", info->name);
+		err = 0;
+#endif
 		goto free_copy;
 	}
 
@@ -4446,6 +4544,24 @@ int module_kallsyms_on_each_symbol(int (*fn)(void *, const char *,
 }
 #endif /* CONFIG_KALLSYMS */
 
+static void cfi_init(struct module *mod)
+{
+#ifdef CONFIG_AMLOGIC_CFI_CLANG
+	rcu_read_lock_sched();
+	mod->cfi_check = (cfi_check_fn)find_kallsyms_symbol_value(mod,
+						CFI_CHECK_FN_NAME);
+	rcu_read_unlock_sched();
+	cfi_module_add(mod, module_addr_min, module_addr_max);
+#endif
+}
+
+static void cfi_cleanup(struct module *mod)
+{
+#ifdef CONFIG_AMLOGIC_CFI_CLANG
+	cfi_module_remove(mod, module_addr_min, module_addr_max);
+#endif
+}
+
 /* Maximum number of characters written by module_flags() */
 #define MODULE_FLAGS_BUF_SIZE (TAINT_FLAGS_COUNT + 4)
 
@@ -4637,7 +4753,9 @@ struct module *__module_address(unsigned long addr)
 	}
 	return mod;
 }
-
+#ifdef CONFIG_AMLOGIC_MODIFY
+EXPORT_SYMBOL_GPL(__module_address);
+#endif
 /*
  * is_module_text_address - is this address inside module code?
  * @addr: the address to check.

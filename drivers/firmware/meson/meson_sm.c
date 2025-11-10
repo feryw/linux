@@ -272,6 +272,7 @@ static int __init meson_sm_probe(struct platform_device *pdev)
 
 	chip = of_match_device(meson_sm_ids, &pdev->dev)->data;
 
+
 	if (chip->cmd_shmem_in_base) {
 		fw.sm_shmem_in_base = meson_sm_map_shmem(chip->cmd_shmem_in_base,
 							 chip->shmem_size);

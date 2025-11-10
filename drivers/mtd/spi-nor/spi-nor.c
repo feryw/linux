@@ -22,7 +22,9 @@
 #include <linux/sched/task_stack.h>
 #include <linux/spi/flash.h>
 #include <linux/mtd/spi-nor.h>
-
+#ifdef CONFIG_AMLOGIC_MODIFY
+#include <linux/gpio.h>
+#endif
 /* Define max times to check status register before we give up. */
 
 /*
@@ -2505,6 +2507,18 @@ static const struct flash_info spi_nor_ids[] = {
 	/* XMC (Wuhan Xinxin Semiconductor Manufacturing Corp.) */
 	{ "XM25QH64A", INFO(0x207017, 0, 64 * 1024, 128, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
 	{ "XM25QH128A", INFO(0x207018, 0, 64 * 1024, 256, SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ) },
+
+	{"GD25Q80C", INFO(0xc84014, 0x0, 64 * 1024, 16,
+		SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ |
+		SPI_NOR_4B_OPCODES | SPI_NOR_HAS_LOCK | SPI_NOR_HAS_TB) },
+	{"FM25Q08A", INFO(0xa14014, 0x0, 64 * 1024, 16,
+		SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ |
+		SPI_NOR_4B_OPCODES) },
+	{"BY25D80", INFO(0x684014, 0x0, 64 * 1024, 16,
+		SECT_4K | SPI_NOR_DUAL_READ) },
+	{"P25Q80H", INFO(0x856014, 0x0, 64 * 1024, 16,
+		SECT_4K | SPI_NOR_DUAL_READ | SPI_NOR_QUAD_READ |
+		SPI_NOR_4B_OPCODES) },
 	{ },
 };
 
@@ -4983,6 +4997,9 @@ static int spi_nor_probe(struct spi_mem *spimem)
 	struct spi_device *spi = spimem->spi;
 	struct flash_platform_data *data = dev_get_platdata(&spi->dev);
 	struct spi_nor *nor;
+#ifdef CONFIG_AMLOGIC_MODIFY
+	struct pinctrl *pc;
+#endif
 	/*
 	 * Enable all caps by default. The core will mask them after
 	 * checking what's really supported using spi_mem_supports_op().
@@ -5021,8 +5038,17 @@ static int spi_nor_probe(struct spi_mem *spimem)
 		flash_name = spi->modalias;
 
 	ret = spi_nor_scan(nor, flash_name, &hwcaps);
-	if (ret)
+	if (ret) {
+#ifdef CONFIG_AMLOGIC_MODIFY
+		if (gpio_is_valid(spi->cs_gpio))
+			gpio_free(spi->cs_gpio);
+		pc = spi->controller->dev.parent->pins->p;
+		/* put twice here if get pc with devm_pinctrl_get */
+		if (pc)
+			devm_pinctrl_put(pc);
+#endif
 		return ret;
+	}
 
 	/*
 	 * None of the existing parts have > 512B pages, but let's play safe

@@ -82,46 +82,13 @@ static int init_display(struct fbtft_par *par)
 	write_reg(par, MIPI_DCS_EXIT_SLEEP_MODE);
 	mdelay(120);
 
-	/* set pixel format to RGB-565 */
-	write_reg(par, MIPI_DCS_SET_PIXEL_FORMAT, MIPI_DCS_PIXEL_FMT_16BIT);
+       /* gamma setting */
+	write_reg(par, 0xe0, 0xd0, 0x04, 0x0d, 0x11, 0x13,
+			0x2b, 0x3f, 0x54, 0x4c, 0x18, 0x0d, 0x0b, 0x1f, 0x23);
+	write_reg(par, 0xe1, 0xd0, 0x04, 0x0c, 0x11, 0x13,
+			0x2c, 0x3f, 0x44, 0x51, 0x2f, 0x1f, 0x1f, 0x20, 0x23);
 
-	write_reg(par, PORCTRL, 0x08, 0x08, 0x00, 0x22, 0x22);
-
-	/*
-	 * VGH = 13.26V
-	 * VGL = -10.43V
-	 */
-	write_reg(par, GCTRL, 0x35);
-
-	/*
-	 * VDV and VRH register values come from command write
-	 * (instead of NVM)
-	 */
-	write_reg(par, VDVVRHEN, 0x01, 0xFF);
-
-	/*
-	 * VAP =  4.1V + (VCOM + VCOM offset + 0.5 * VDV)
-	 * VAN = -4.1V + (VCOM + VCOM offset + 0.5 * VDV)
-	 */
-	write_reg(par, VRHS, 0x0B);
-
-	/* VDV = 0V */
-	write_reg(par, VDVS, 0x20);
-
-	/* VCOM = 0.9V */
-	write_reg(par, VCOMS, 0x20);
-
-	/* VCOM offset = 0V */
-	write_reg(par, VCMOFSET, 0x20);
-
-	/*
-	 * AVDD = 6.8V
-	 * AVCL = -4.8V
-	 * VDS = 2.3V
-	 */
-	write_reg(par, PWCTRL1, 0xA4, 0xA1);
-
-	write_reg(par, MIPI_DCS_SET_DISPLAY_ON);
+	write_reg(par, 0x29);
 	return 0;
 }
 
@@ -230,6 +197,33 @@ static int blank(struct fbtft_par *par, bool on)
 	return 0;
 }
 
+static void write_register(struct fbtft_par *par, int len, ...)
+{
+	va_list args;
+	int i;
+
+	va_start(args, len);
+	if (len == 1) {
+		/*only write command*/
+		for (i = 0; i < len; i++)
+			par->buf[i] = va_arg(args, unsigned int);
+
+		/* keep DC low for all command bytes to transfer */
+		fbtft_write_buf_dc(par, par->buf, len, 0);
+	} else if (len > 1) {
+		/*write command and data*/
+		for (i = 0; i < len; i++)
+			par->buf[i] = va_arg(args, unsigned int);
+
+		/* keep DC low for all command bytes to transfer */
+		fbtft_write_buf_dc(par, par->buf, 1, 0);
+
+		/* keep DC high for all data bytes to transfer */
+		fbtft_write_buf_dc(par, par->buf + 1, len - 1, 1);
+	}
+	va_end(args);
+}
+
 static struct fbtft_display display = {
 	.regwidth = 8,
 	.width = 240,
@@ -242,6 +236,7 @@ static struct fbtft_display display = {
 		.set_var = set_var,
 		.set_gamma = set_gamma,
 		.blank = blank,
+		.write_register = write_register,
 	},
 };
 

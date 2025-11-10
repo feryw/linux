@@ -2,6 +2,7 @@
 // Copyright (C) 2018 ROHM Semiconductors
 // bd71837-regulator.c ROHM BD71837MWV/BD71847MWV regulator driver
 
+#include <linux/bits.h>
 #include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/interrupt.h>
@@ -99,6 +100,55 @@ static int bd718xx_set_voltage_sel_restricted(struct regulator_dev *rdev,
 	return regulator_set_voltage_sel_regmap(rdev, sel);
 }
 
+#define BD718XX_BUCK_FORCE_PWM BIT(3)
+
+static int bd718xx_buck8_set_voltage_sel_restricted(struct regulator_dev *rdev,
+						    unsigned int sel)
+{
+	int old_protect_reg, old_mode_reg;
+	int enabled, ret;
+	const struct regulator_desc *d = rdev->desc;
+
+	enabled = regulator_is_enabled_regmap(rdev);
+	if (enabled) {
+		ret = regmap_read(rdev->regmap, d->enable_reg, &old_mode_reg);
+		if (ret)
+			return ret;
+
+		ret = regmap_read(rdev->regmap, BD718XX_REG_MVRFLTMASK0,
+			    &old_protect_reg);
+		if (ret)
+			return ret;
+
+		ret = regmap_write(rdev->regmap, BD718XX_REG_MVRFLTMASK0,
+			     old_protect_reg | BD718XX_4TH_NODVS_BUCK_VRMON80 |
+			     BD718XX_4TH_NODVS_BUCK_VRMON130);
+		if (ret)
+			return ret;
+		ret = regmap_write(rdev->regmap, d->enable_reg, old_mode_reg |
+			     BD718XX_BUCK_FORCE_PWM);
+		if (ret)
+			return ret;
+	}
+
+	ret = regulator_set_voltage_sel_regmap(rdev, sel);
+
+	if (enabled) {
+		int tmp;
+
+		tmp = regmap_write(rdev->regmap, BD718XX_REG_MVRFLTMASK0,
+			     old_protect_reg);
+		if (tmp)
+			dev_warn(rdev_get_dev(rdev),
+				 "Failed to restore power fault detection\n");
+		tmp = regmap_write(rdev->regmap, d->enable_reg, old_mode_reg);
+		if (tmp)
+			dev_warn(rdev_get_dev(rdev),
+				 "Failed to restore modulation mode\n");
+	}
+	return ret;
+}
+
 static int bd718xx_set_voltage_sel_pickable_restricted(
 		struct regulator_dev *rdev, unsigned int sel)
 {
@@ -136,6 +186,21 @@ static const struct regulator_ops bd718xx_ldo_regulator_ops = {
 	.get_voltage_sel = regulator_get_voltage_sel_regmap,
 };
 
+/*
+ * In this very specific case the LDO6 is reserved to be used to tune
+ * the BUCK8 output. Thus the LDO6 should be enabled and fixed to 1.6V
+ * Let's remove the enable/disable control as well as voltage setting
+ * functions just to be on a safe side.
+ *
+ * In normal conditions the bd718xx_ldo_regulator_ops can be used for LDO6
+ * instead of this reduced op structure.
+ */
+static const struct regulator_ops bd718xx_ldo6_regulator_ops = {
+	.is_enabled = regulator_is_enabled_regmap,
+	.list_voltage = regulator_list_voltage_linear_range,
+	.get_voltage_sel = regulator_get_voltage_sel_regmap,
+};
+
 static const struct regulator_ops bd718xx_ldo_regulator_nolinear_ops = {
 	.enable = regulator_enable_regmap,
 	.disable = regulator_disable_regmap,
@@ -143,6 +208,16 @@ static const struct regulator_ops bd718xx_ldo_regulator_nolinear_ops = {
 	.list_voltage = regulator_list_voltage_table,
 	.set_voltage_sel = bd718xx_set_voltage_sel_restricted,
 	.get_voltage_sel = regulator_get_voltage_sel_regmap,
+};
+
+static const struct regulator_ops bd718xx_buck8_regulator_ops = {
+	.enable = regulator_enable_regmap,
+	.disable = regulator_disable_regmap,
+	.is_enabled = regulator_is_enabled_regmap,
+	.list_voltage = regulator_list_voltage_linear_range,
+	.set_voltage_sel = bd718xx_buck8_set_voltage_sel_restricted,
+	.get_voltage_sel = regulator_get_voltage_sel_regmap,
+	.set_voltage_time_sel = regulator_set_voltage_time_sel,
 };
 
 static const struct regulator_ops bd718xx_buck_regulator_ops = {
@@ -175,6 +250,22 @@ static const struct regulator_ops bd718xx_dvs_buck_regulator_ops = {
 	.get_voltage_sel = regulator_get_voltage_sel_regmap,
 	.set_voltage_time_sel = regulator_set_voltage_time_sel,
 	.set_ramp_delay = bd718xx_buck1234_set_ramp_delay,
+};
+
+static int bd71837_muxsw_en_set_voltage(struct regulator_dev *rdev,
+					int min_uV,
+					int max_uV,
+					unsigned int *selector)
+{
+	return 0;
+}
+
+static const struct regulator_ops bd718xx_muxsw_en_regulator_ops = {
+	.enable = regulator_enable_regmap,
+	.disable = regulator_disable_regmap,
+	.is_enabled = regulator_is_enabled_regmap,
+	.set_voltage = bd71837_muxsw_en_set_voltage,
+	.list_voltage = regulator_list_voltage_table,
 };
 
 /*
@@ -266,9 +357,30 @@ static const unsigned int bd718xx_3rd_nodvs_buck_volts[] = {
 /*
  * BUCK8
  * 0.8V to 1.40V (step 10mV)
+ * This range would be correct if there was nos external circuitry.
+ *
+ * static const struct regulator_linear_range bd718xx_4th_nodvs_buck_volts[] = {
+ *	REGULATOR_LINEAR_RANGE(800000, 0x00, 0x3C, 10000),
+ * };
+ */
+
+/*
+ * BUCK8 voltages with project specific external connection to buck8 feedback
+ * PIN. Please note that these voltages are incorrect for normal use-cases and
+ * are intended only to be used when LDO6 output 1.6V is connected to buck8
+ * feed-back over suitable resistors (which I don't remember right now).
+ *
+ * In other words - this is a hack for a specific project.
+ * TODO: If this kind of hacks are here to stay - then we should compute the
+ * impact of connecting a voltage to feedback pin and introduce DT properties
+ * to describe the resistor values && compute the correct voltage ranges here
+ * instead of hard-coding them. But that might be error prone and as long as
+ * this kind of "scaling circuitry" is not common use-case we should stick
+ * with this simple solution
  */
 static const struct regulator_linear_range bd718xx_4th_nodvs_buck_volts[] = {
-	REGULATOR_LINEAR_RANGE(800000, 0x00, 0x3C, 10000),
+	REGULATOR_LINEAR_RANGE(680000, 0x00, 0x3C, 11500),
+	REGULATOR_LINEAR_RANGE(1370000, 0x3C, 0x3F, 0),
 };
 
 /*
@@ -339,6 +451,14 @@ static const struct regulator_linear_range bd718xx_ldo6_volts[] = {
  */
 static const struct regulator_linear_range bd71837_ldo7_volts[] = {
 	REGULATOR_LINEAR_RANGE(1800000, 0x00, 0x0F, 100000),
+};
+
+/*
+ * MUXSW_EN
+ * 1.8
+ */
+static const unsigned int muxsw_en_volts[] = {
+	1800000
 };
 
 struct reg_init {
@@ -1000,7 +1120,7 @@ static const struct bd718xx_regulator_data bd71837_regulators[] = {
 			.of_match = of_match_ptr("BUCK8"),
 			.regulators_node = of_match_ptr("regulators"),
 			.id = BD718XX_BUCK8,
-			.ops = &bd718xx_buck_regulator_ops,
+			.ops = &bd718xx_buck8_regulator_ops,
 			.type = REGULATOR_VOLTAGE,
 			.n_voltages = BD718XX_4TH_NODVS_BUCK_VOLTAGE_NUM,
 			.linear_ranges = bd718xx_4th_nodvs_buck_volts,
@@ -1151,7 +1271,8 @@ static const struct bd718xx_regulator_data bd71837_regulators[] = {
 			.of_match = of_match_ptr("LDO6"),
 			.regulators_node = of_match_ptr("regulators"),
 			.id = BD718XX_LDO6,
-			.ops = &bd718xx_ldo_regulator_ops,
+/*			.ops = &bd718xx_ldo_regulator_ops, */
+			.ops = &bd718xx_ldo6_regulator_ops,
 			.type = REGULATOR_VOLTAGE,
 			.n_voltages = BD718XX_LDO6_VOLTAGE_NUM,
 			.linear_ranges = bd718xx_ldo6_volts,
@@ -1197,6 +1318,21 @@ static const struct bd718xx_regulator_data bd71837_regulators[] = {
 			.val = BD718XX_LDO_SEL,
 		},
 	},
+	{
+		.desc = {
+			.name = "muxsw_en",
+			.of_match = of_match_ptr("MUXSW_EN"),
+			.regulators_node = of_match_ptr("regulators"),
+			.id = BD718XX_MUXSW_EN,
+			.ops = &bd718xx_muxsw_en_regulator_ops,
+			.type = REGULATOR_VOLTAGE,
+			.n_voltages = BD71837_MUXSW_EN_VOLTAGE_NUM,
+			.volt_table = &muxsw_en_volts[0],
+			.enable_reg = BD71837_REG_MUXSW_EN,
+			.enable_mask = BD71837_MUXSW_EN_MASK,
+			.owner = THIS_MODULE,
+		},
+	},
 };
 
 struct bd718xx_pmic_inits {
@@ -1217,6 +1353,12 @@ static int bd718xx_probe(struct platform_device *pdev)
 			.r_datas = bd71847_regulators,
 			.r_amount = ARRAY_SIZE(bd71847_regulators),
 		},
+#ifdef CONFIG_AMLOGIC_MODIFY
+		[ROHM_CHIP_TYPE_BD71888] = {
+			.r_datas = bd71837_regulators,
+			.r_amount = ARRAY_SIZE(bd71837_regulators),
+		},
+#endif
 	};
 
 	int i, j, err;

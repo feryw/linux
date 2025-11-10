@@ -217,6 +217,10 @@
  THUMB(	mov	\rd, sp			)
  THUMB(	lsr	\rd, \rd, #THREAD_SIZE_ORDER + PAGE_SHIFT	)
 	mov	\rd, \rd, lsl #THREAD_SIZE_ORDER + PAGE_SHIFT
+#ifdef CONFIG_AMLOGIC_VMAP
+	add	\rd, \rd, #TI_THREAD_SIZE
+	sub	\rd, \rd, #TI_THREAD_INFO_SIZE
+#endif
 	.endm
 
 /*
@@ -503,5 +507,22 @@ THUMB(	orr	\reg , \reg , #PSR_T_BIT	)
 #else
 #define _ASM_NOKPROBE(entry)
 #endif
+
+	/*
+	 * rev_l - byte-swap a 32-bit value
+	 *
+	 * @val: source/destination register
+	 * @tmp: scratch register
+	 */
+	.macro		rev_l, val:req, tmp:req
+	.if		__LINUX_ARM_ARCH__ < 6
+	eor		\tmp, \val, \val, ror #16
+	bic		\tmp, \tmp, #0x00ff0000
+	mov		\val, \val, ror #8
+	eor		\val, \val, \tmp, lsr #8
+	.else
+	rev		\val, \val
+	.endif
+	.endm
 
 #endif /* __ASM_ASSEMBLER_H__ */

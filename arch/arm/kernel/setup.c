@@ -59,9 +59,16 @@
 #include <asm/unwind.h>
 #include <asm/memblock.h>
 #include <asm/virt.h>
+#ifdef CONFIG_AMLOGIC_VMAP
+#include <linux/amlogic/vmap_stack.h>
+#endif
+#include <asm/kasan.h>
 
 #include "atags.h"
 
+#ifdef CONFIG_AMLOGIC_CPU_INFO
+#include <linux/amlogic/cpu_info.h>
+#endif
 
 #if defined(CONFIG_FPE_NWFPE) || defined(CONFIG_FPE_FASTFPE)
 char fpe_type[8];
@@ -515,6 +522,17 @@ static void __init elf_hwcap_fixup(void)
 		elf_hwcap &= ~HWCAP_SWP;
 }
 
+#ifdef CONFIG_AMLOGIC_VMAP
+void __init fixup_init_thread_union(void)
+{
+	void *p;
+
+	p = (void *)((unsigned long)&init_thread_union + THREAD_INFO_OFFSET);
+	memcpy(p, &init_thread_union, THREAD_INFO_SIZE);
+	memset(&init_thread_union, 0, THREAD_INFO_SIZE);
+}
+#endif
+
 /*
  * cpu_init - initialise one CPU.
  *
@@ -580,6 +598,9 @@ void notrace cpu_init(void)
 	      "I" (offsetof(struct stack, fiq[0])),
 	      PLC_l (PSR_F_BIT | PSR_I_BIT | SVC_MODE)
 	    : "r14");
+#ifdef CONFIG_AMLOGIC_VMAP
+	__setup_vmap_stack(cpu);
+#endif
 #endif
 }
 
@@ -1076,6 +1097,20 @@ void __init hyp_mode_check(void)
 #endif
 }
 
+static void (*__arm_pm_restart)(enum reboot_mode reboot_mode, const char *cmd);
+
+static int arm_restart(struct notifier_block *nb, unsigned long action,
+		       void *data)
+{
+	__arm_pm_restart(action, data);
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block arm_restart_nb = {
+	.notifier_call = arm_restart,
+	.priority = 128,
+};
+
 void __init setup_arch(char **cmdline_p)
 {
 	const struct machine_desc *mdesc = NULL;
@@ -1141,10 +1176,13 @@ void __init setup_arch(char **cmdline_p)
 	early_ioremap_reset();
 
 	paging_init(mdesc);
+	kasan_init();
 	request_standard_resources(mdesc);
 
-	if (mdesc->restart)
-		arm_pm_restart = mdesc->restart;
+	if (mdesc->restart) {
+		__arm_pm_restart = mdesc->restart;
+		register_restart_handler(&arm_restart_nb);
+	}
 
 	unflatten_device_tree();
 
@@ -1251,7 +1289,9 @@ static int c_show(struct seq_file *m, void *v)
 {
 	int i, j;
 	u32 cpuid;
-
+#ifdef CONFIG_AMLOGIC_CPU_INFO
+	unsigned char chipid[CHIPID_LEN];
+#endif
 	for_each_online_cpu(i) {
 		/*
 		 * glibc reads /proc/cpuinfo to determine the number of
@@ -1305,11 +1345,18 @@ static int c_show(struct seq_file *m, void *v)
 		}
 		seq_printf(m, "CPU revision\t: %d\n\n", cpuid & 15);
 	}
-
+#ifdef CONFIG_AMLOGIC_CPU_INFO
+	cpuinfo_get_chipid(chipid, CHIPID_LEN);
+	seq_puts(m, "Serial\t\t: ");
+	for (i = 0; i < 16; i++)
+		seq_printf(m, "%02x", chipid[i]);
+	seq_puts(m, "\n");
+	seq_printf(m, "Hardware\t: %s\n", "Amlogic");
+#else
 	seq_printf(m, "Hardware\t: %s\n", machine_name);
 	seq_printf(m, "Revision\t: %04x\n", system_rev);
 	seq_printf(m, "Serial\t\t: %s\n", system_serial);
-
+#endif
 	return 0;
 }
 

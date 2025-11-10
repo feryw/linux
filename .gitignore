@@ -62,6 +62,8 @@ modules.order
 /Module.markers
 /modules.builtin.modinfo
 
+/customer
+
 #
 # RPM spec file (make rpm-pkg)
 #
@@ -146,3 +148,5 @@ x509.genkey
 
 # Clang's compilation database file
 /compile_commands.json
+
+*.symversions

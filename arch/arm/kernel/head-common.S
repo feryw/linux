@@ -95,7 +95,7 @@ __mmap_switched:
  THUMB(	ldmia	r4!, {r0, r1, r2, r3} )
  THUMB(	mov	sp, r3 )
 	sub	r2, r2, r1
-	bl	memcpy				@ copy .data to RAM
+	bl	__memcpy			@ copy .data to RAM
 #endif
 
    ARM(	ldmia	r4!, {r0, r1, sp} )
@@ -103,7 +103,22 @@ __mmap_switched:
  THUMB(	mov	sp, r3 )
 	sub	r2, r1, r0
 	mov	r1, #0
-	bl	memset				@ clear .bss
+	bl	__memset			@ clear .bss
+
+#if defined (CONFIG_KASAN) && defined (CONFIG_AMLOGIC_VMAP)
+	/* After bss cleard, kasan_early_shadow_page are 0 in cache
+	 * But on A55 it's physical memory keeps random data, this
+	 * physical page will be mapped to shadow memory very soon(few
+	 * lines behind) in function kasan_early_init, this caused kasan
+	 * shadow memory check failed and crashed in function
+	 * fixup_init_thread_union(). However, this problem don't see on
+	 * A35 processor. Rootcause may related with core's cache replace/
+	 * clean policy.
+	 */
+	push	{r0-r12, lr}
+	bl	v7_flush_dcache_all
+	pop	{r0-r12, lr}
+#endif
 
 	ldmia	r4, {r0, r1, r2, r3}
 	str	r9, [r0]			@ Save processor ID
@@ -111,7 +126,13 @@ __mmap_switched:
 	str	r8, [r2]			@ Save atags pointer
 	cmp	r3, #0
 	strne	r10, [r3]			@ Save control register values
+#ifdef CONFIG_KASAN
+	bl	kasan_early_init
+#endif
 	mov	lr, #0
+#ifdef CONFIG_AMLOGIC_VMAP
+	bl	fixup_init_thread_union
+#endif
 	b	start_kernel
 ENDPROC(__mmap_switched)
 
@@ -129,7 +150,11 @@ __mmap_switched_data:
 
 	.long	__bss_start			@ r0
 	.long	__bss_stop			@ r1
+#ifdef CONFIG_AMLOGIC_VMAP
+	.long	init_thread_union + TI_THREAD_START_SP @ sp
+#else
 	.long	init_thread_union + THREAD_START_SP @ sp
+#endif
 
 	.long	processor_id			@ r0
 	.long	__machine_arch_type		@ r1

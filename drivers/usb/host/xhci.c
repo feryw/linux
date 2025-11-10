@@ -17,10 +17,12 @@
 #include <linux/slab.h>
 #include <linux/dmi.h>
 #include <linux/dma-mapping.h>
+#ifdef CONFIG_AMLOGIC_USB
+#include <linux/amlogic/cpu_version.h>
+#endif
 
 #include "xhci.h"
 #include "xhci-trace.h"
-#include "xhci-mtk.h"
 #include "xhci-debugfs.h"
 #include "xhci-dbgcap.h"
 
@@ -37,6 +39,10 @@ MODULE_PARM_DESC(link_quirk, "Don't clear the chain bit on a link TRB");
 static unsigned long long quirks;
 module_param(quirks, ullong, S_IRUGO);
 MODULE_PARM_DESC(quirks, "Bit flags for quirks to be enabled as default");
+
+#ifdef CONFIG_AMLOGIC_USB
+unsigned int db_wait;
+#endif
 
 static bool td_on_ring(struct xhci_td *td, struct xhci_ring *ring)
 {
@@ -132,7 +138,9 @@ int xhci_start(struct xhci_hcd *xhci)
 {
 	u32 temp;
 	int ret;
-
+#ifdef CONFIG_AMLOGIC_USB
+	xhci->xhc_state |= XHCI_STATE_STARTING;
+#endif
 	temp = readl(&xhci->op_regs->command);
 	temp |= (CMD_RUN);
 	xhci_dbg_trace(xhci, trace_xhci_dbg_init, "// Turn on HC, cmd = 0x%x.",
@@ -1167,15 +1175,16 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 		}
 	}
 
+#ifndef CONFIG_AMLOGIC_USB
 	temp = readl(&xhci->op_regs->status);
-
 	/* re-initialize the HC on Restore Error, or Host Controller Error */
 	if (temp & (STS_SRE | STS_HCE)) {
-		reinit_xhc = true;
-		xhci_warn(xhci, "xHC error in resume, USBSTS 0x%x, Reinit\n", temp);
+			reinit_xhc = true;
+			xhci_warn(xhci, "xHC error in resume, USBSTS 0x%x, Reinit\n", temp);
 	}
 
 	if (reinit_xhc) {
+#endif
 		if ((xhci->quirks & XHCI_COMP_MODE_QUIRK) &&
 				!(xhci_all_ports_seen_u0(xhci))) {
 			del_timer_sync(&xhci->comp_mode_recovery_timer);
@@ -1232,6 +1241,7 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 		hcd->state = HC_STATE_SUSPENDED;
 		xhci->shared_hcd->state = HC_STATE_SUSPENDED;
 		goto done;
+#ifndef CONFIG_AMLOGIC_USB
 	}
 
 	/* step 4: set Run/Stop bit */
@@ -1253,6 +1263,7 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 	spin_unlock_irq(&xhci->lock);
 
 	xhci_dbc_resume(xhci);
+#endif
 
  done:
 	if (retval == 0) {
@@ -1278,8 +1289,10 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 	 * to suffer the Compliance Mode issue again. It doesn't matter if
 	 * ports have entered previously to U0 before system's suspension.
 	 */
+#ifndef CONFIG_AMLOGIC_USB
 	if ((xhci->quirks & XHCI_COMP_MODE_QUIRK) && !comp_timer_running)
 		compliance_mode_recovery_timer_init(xhci);
+#endif
 
 	if (xhci->quirks & XHCI_ASMEDIA_MODIFY_FLOWCONTROL)
 		usb_asmedia_modifyflowcontrol(to_pci_dev(hcd->self.controller));
@@ -1333,6 +1346,7 @@ unsigned int xhci_get_endpoint_index(struct usb_endpoint_descriptor *desc)
 			(usb_endpoint_dir_in(desc) ? 1 : 0) - 1;
 	return index;
 }
+EXPORT_SYMBOL_GPL(xhci_get_endpoint_index);
 
 /* The reverse operation to xhci_get_endpoint_index. Calculate the USB endpoint
  * address from the XHCI endpoint index.
@@ -1506,6 +1520,10 @@ static int xhci_urb_enqueue(struct usb_hcd *hcd, struct urb *urb, gfp_t mem_flag
 	unsigned int *ep_state;
 	struct urb_priv	*urb_priv;
 	int num_tds;
+#ifdef CONFIG_AMLOGIC_USB
+	struct usb_ctrlrequest *setup;
+	unsigned char *align_addr;
+#endif
 
 	if (!urb)
 		return -EINVAL;
@@ -1548,6 +1566,53 @@ static int xhci_urb_enqueue(struct usb_hcd *hcd, struct urb *urb, gfp_t mem_flag
 
 	trace_xhci_urb_enqueue(urb);
 
+#ifdef CONFIG_AMLOGIC_USB
+	if (xhci->quirks & XHCI_CRG_HOST) {
+		if (((is_meson_t5_cpu()) && (is_meson_rev_a())) ||
+			((is_meson_t5d_cpu()) && (is_meson_rev_a()))) {
+			if (((long)urb->transfer_dma) & 0xf) {
+				if (urb->transfer_buffer_length > CRG_MAX_ALIGN_BUFFER_LENGTH) {
+					if ((urb->pipe & USB_DIR_IN) == 0) {
+						xhci_warn(xhci, "transfer buffer is not align\n");
+						xhci_warn(xhci, "OUT DIR\n");
+						xhci_warn(xhci, "transfer buffer length is %d, overflow\n",
+							urb->transfer_buffer_length);
+					}
+				}
+			}
+
+			if (((urb->pipe & USB_DIR_IN) == 0) &&
+				urb->transfer_buffer_length <= CRG_MAX_ALIGN_BUFFER_LENGTH &&
+					(((long)urb->transfer_dma) & 0xf)) {
+				align_addr = (char *)
+					(((unsigned long)urb_priv->transfer_data + 0xf) & (~0xf));
+				memcpy(align_addr, urb->transfer_buffer,
+					urb->transfer_buffer_length);
+				dma_unmap_single(hcd->self.controller, urb->transfer_dma,
+					urb->transfer_buffer_length, DMA_TO_DEVICE);
+				urb->transfer_dma = dma_map_single
+					(hcd->self.controller, align_addr,
+					urb->transfer_buffer_length, DMA_TO_DEVICE);
+			}
+
+			if ((urb->transfer_flags & URB_SETUP_MAP_SINGLE) &&
+				(((long)urb->setup_dma) & 0xf) &&
+				((urb->pipe & USB_DIR_IN) == 0)) {
+				align_addr = (char *)
+					(((unsigned long)urb_priv->setup_data + 0xf) & (~0xf));
+				memcpy(align_addr, urb->setup_packet,
+					sizeof(struct usb_ctrlrequest));
+				dma_unmap_single(hcd->self.controller, urb->setup_dma,
+					sizeof(struct usb_ctrlrequest), DMA_TO_DEVICE);
+				urb->setup_dma = dma_map_single(hcd->self.controller,
+						align_addr,
+						sizeof(struct usb_ctrlrequest),
+						DMA_TO_DEVICE);
+			}
+		}
+	}
+#endif
+
 	if (usb_endpoint_xfer_control(&urb->ep->desc)) {
 		/* Check to see if the max packet size for the default control
 		 * endpoint changed during FS device enumeration
@@ -1586,8 +1651,36 @@ static int xhci_urb_enqueue(struct usb_hcd *hcd, struct urb *urb, gfp_t mem_flag
 	switch (usb_endpoint_type(&urb->ep->desc)) {
 
 	case USB_ENDPOINT_XFER_CONTROL:
-		ret = xhci_queue_ctrl_tx(xhci, GFP_ATOMIC, urb,
-					 slot_id, ep_index);
+#ifdef CONFIG_AMLOGIC_USB
+		setup = (struct usb_ctrlrequest *)urb->setup_packet;
+		if (setup->bRequestType == 0x80 &&
+		    setup->bRequest == 0x06 &&
+		    setup->wValue == 0x0100 &&
+		    setup->wIndex != 0x0) {
+			if (((setup->wIndex >> 8) & 0xff) == 7) {
+				setup->wIndex = 0;
+				spin_unlock_irqrestore(&xhci->lock, flags);
+				ret = xhci_test_single_step(xhci,
+							    GFP_ATOMIC, urb,
+							    slot_id,
+							    ep_index, 1);
+				spin_lock_irqsave(&xhci->lock, flags);
+			} else if (((setup->wIndex >> 8) & 0xff) == 8) {
+				setup->wIndex = 0;
+				spin_unlock_irqrestore(&xhci->lock, flags);
+				ret = xhci_test_single_step(xhci,
+							    GFP_ATOMIC, urb,
+							    slot_id,
+							    ep_index, 2);
+				spin_lock_irqsave(&xhci->lock, flags);
+			}
+		} else {
+#endif
+			ret = xhci_queue_ctrl_tx(xhci, GFP_ATOMIC, urb,
+						 slot_id, ep_index);
+#ifdef CONFIG_AMLOGIC_USB
+		}
+#endif
 		break;
 	case USB_ENDPOINT_XFER_BULK:
 		ret = xhci_queue_bulk_tx(xhci, GFP_ATOMIC, urb,
@@ -1774,8 +1867,8 @@ err_giveback:
  * disabled, so there's no need for mutual exclusion to protect
  * the xhci->devs[slot_id] structure.
  */
-static int xhci_drop_endpoint(struct usb_hcd *hcd, struct usb_device *udev,
-		struct usb_host_endpoint *ep)
+int xhci_drop_endpoint(struct usb_hcd *hcd, struct usb_device *udev,
+		       struct usb_host_endpoint *ep)
 {
 	struct xhci_hcd *xhci;
 	struct xhci_container_ctx *in_ctx, *out_ctx;
@@ -1835,9 +1928,6 @@ static int xhci_drop_endpoint(struct usb_hcd *hcd, struct usb_device *udev,
 
 	xhci_endpoint_zero(xhci, xhci->devs[udev->slot_id], ep);
 
-	if (xhci->quirks & XHCI_MTK_HOST)
-		xhci_mtk_drop_ep_quirk(hcd, udev, ep);
-
 	xhci_dbg(xhci, "drop ep 0x%x, slot id %d, new drop flags = %#x, new add flags = %#x\n",
 			(unsigned int) ep->desc.bEndpointAddress,
 			udev->slot_id,
@@ -1845,6 +1935,7 @@ static int xhci_drop_endpoint(struct usb_hcd *hcd, struct usb_device *udev,
 			(unsigned int) new_add_flags);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(xhci_drop_endpoint);
 
 /* Add an endpoint to a new possible bandwidth configuration for this device.
  * Only one call to this function is allowed per endpoint before
@@ -1859,8 +1950,8 @@ static int xhci_drop_endpoint(struct usb_hcd *hcd, struct usb_device *udev,
  * configuration or alt setting is installed in the device, so there's no need
  * for mutual exclusion to protect the xhci->devs[slot_id] structure.
  */
-static int xhci_add_endpoint(struct usb_hcd *hcd, struct usb_device *udev,
-		struct usb_host_endpoint *ep)
+int xhci_add_endpoint(struct usb_hcd *hcd, struct usb_device *udev,
+		      struct usb_host_endpoint *ep)
 {
 	struct xhci_hcd *xhci;
 	struct xhci_container_ctx *in_ctx;
@@ -1928,19 +2019,14 @@ static int xhci_add_endpoint(struct usb_hcd *hcd, struct usb_device *udev,
 	 * process context, not interrupt context (or so documenation
 	 * for usb_set_interface() and usb_set_configuration() claim).
 	 */
+	#ifdef CONFIG_AMLOGIC_CMA
+	if (xhci_endpoint_init(xhci, virt_dev, udev, ep, GFP_NOIO | __GFP_NO_CMA) < 0) {
+	#else
 	if (xhci_endpoint_init(xhci, virt_dev, udev, ep, GFP_NOIO) < 0) {
+	#endif
 		dev_dbg(&udev->dev, "%s - could not initialize ep %#x\n",
 				__func__, ep->desc.bEndpointAddress);
 		return -ENOMEM;
-	}
-
-	if (xhci->quirks & XHCI_MTK_HOST) {
-		ret = xhci_mtk_add_ep_quirk(hcd, udev, ep);
-		if (ret < 0) {
-			xhci_ring_free(xhci, virt_dev->eps[ep_index].new_ring);
-			virt_dev->eps[ep_index].new_ring = NULL;
-			return ret;
-		}
 	}
 
 	ctrl_ctx->add_flags |= cpu_to_le32(added_ctxs);
@@ -1967,6 +2053,7 @@ static int xhci_add_endpoint(struct usb_hcd *hcd, struct usb_device *udev,
 			(unsigned int) new_add_flags);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(xhci_add_endpoint);
 
 static void xhci_zero_in_ctx(struct xhci_hcd *xhci, struct xhci_virt_device *virt_dev)
 {
@@ -2779,7 +2866,6 @@ static int xhci_reserve_bandwidth(struct xhci_hcd *xhci,
 	return -ENOMEM;
 }
 
-
 /* Issue a configure endpoint command or evaluate context command
  * and wait for it to finish.
  */
@@ -2793,10 +2879,31 @@ static int xhci_configure_endpoint(struct xhci_hcd *xhci,
 	struct xhci_input_control_ctx *ctrl_ctx;
 	struct xhci_virt_device *virt_dev;
 	struct xhci_slot_ctx *slot_ctx;
+#ifdef CONFIG_AMLOGIC_USB
+	int i, slot_id;
+	struct xhci_ring *ring;
+#endif
 
 	if (!command)
 		return -EINVAL;
 
+#ifdef CONFIG_AMLOGIC_USB
+	if ((xhci->quirks & XHCI_CRG_HOST) &&
+			(is_meson_t5_cpu() || is_meson_t5d_cpu())) {
+		if (udev->speed == USB_SPEED_FULL &&
+		    udev->state == USB_STATE_NOTATTACHED) {
+			db_wait	 = 1;
+			for (i = 0; i < MAX_HC_SLOTS; i++) {
+				if (xhci->devs[i] && xhci->devs[i]->udev &&
+				    xhci->devs[i]->udev != udev) {
+					slot_id = xhci->devs[i]->udev->slot_id;
+					xhci_stop_device(xhci, slot_id, 1);
+				}
+			}
+			msleep(100);
+		}
+	}
+#endif
 	spin_lock_irqsave(&xhci->lock, flags);
 
 	if (xhci->xhc_state & XHCI_STATE_DYING) {
@@ -2852,12 +2959,75 @@ static int xhci_configure_endpoint(struct xhci_hcd *xhci,
 				"FIXME allocate a new ring segment");
 		return -ENOMEM;
 	}
+
+	/*Full speed device disconnect*/
+#ifdef CONFIG_AMLOGIC_USB
+	if ((xhci->quirks & XHCI_CRG_HOST) &&
+			(is_meson_t5_cpu() || is_meson_t5d_cpu())) {
+		if (udev->speed == USB_SPEED_FULL &&
+			udev->state == USB_STATE_NOTATTACHED) {
+			for (i = 1; i < 31; ++i) {
+				ring = xhci->devs[udev->slot_id]->eps[i].ring;
+				if (!ring)
+					continue;
+				queue_trb(xhci, ring, 0,
+					ring->first_seg->trbs->generic.field[0],
+					ring->first_seg->trbs->generic.field[1],
+					ring->first_seg->trbs->generic.field[2],
+					(ring->first_seg->trbs->generic.field[3]
+					& ~0x1) | ring->cycle_state | TRB_IOC);
+
+				writel(DB_VALUE(i, 0),
+					&xhci->dba->doorbell[udev->slot_id]);
+				mdelay(5);
+
+				queue_trb(xhci, ring, 0,
+					ring->first_seg->trbs->generic.field[0],
+					ring->first_seg->trbs->generic.field[1],
+					ring->first_seg->trbs->generic.field[2],
+					(ring->first_seg->trbs->generic.field[3]
+					& ~0x1) | ring->cycle_state | TRB_IOC);
+
+				writel(DB_VALUE(i, 0),
+					&xhci->dba->doorbell[udev->slot_id]);
+				mdelay(5);
+
+				queue_trb(xhci, ring, 0,
+					ring->first_seg->trbs->generic.field[0],
+					ring->first_seg->trbs->generic.field[1],
+					ring->first_seg->trbs->generic.field[2],
+					(ring->first_seg->trbs->generic.field[3]
+					& ~0x1) | ring->cycle_state | TRB_IOC);
+
+				writel(DB_VALUE(i, 0),
+					&xhci->dba->doorbell[udev->slot_id]);
+				mdelay(5);
+				break;
+			}
+		}
+	}
+#endif
 	xhci_ring_cmd_db(xhci);
 	spin_unlock_irqrestore(&xhci->lock, flags);
 
 	/* Wait for the configure endpoint command to complete */
 	wait_for_completion(command->completion);
-
+#ifdef CONFIG_AMLOGIC_USB
+	if ((xhci->quirks & XHCI_CRG_HOST) &&
+			(is_meson_t5_cpu() || is_meson_t5d_cpu())) {
+		if (udev->speed == USB_SPEED_FULL &&
+			udev->state == USB_STATE_NOTATTACHED) {
+			db_wait	 = 0;
+			for (i = 0; i < MAX_HC_SLOTS; i++) {
+				if (xhci->devs[i] && xhci->devs[i]->udev &&
+					xhci->devs[i]->udev != udev) {
+					slot_id = xhci->devs[i]->udev->slot_id;
+					xhci_ring_device(xhci, slot_id);
+				}
+			}
+		}
+	}
+#endif
 	if (!ctx_change)
 		ret = xhci_configure_endpoint_result(xhci, udev,
 						     &command->status);
@@ -3000,6 +3170,7 @@ command_cleanup:
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(xhci_check_bandwidth);
 
 void xhci_reset_bandwidth(struct usb_hcd *hcd, struct usb_device *udev)
 {
@@ -3024,6 +3195,7 @@ void xhci_reset_bandwidth(struct usb_hcd *hcd, struct usb_device *udev)
 	}
 	xhci_zero_in_ctx(xhci, virt_dev);
 }
+EXPORT_SYMBOL_GPL(xhci_reset_bandwidth);
 
 static void xhci_setup_input_ctx_for_config_ep(struct xhci_hcd *xhci,
 		struct xhci_container_ctx *in_ctx,
@@ -3955,7 +4127,11 @@ int xhci_disable_slot(struct xhci_hcd *xhci, u32 slot_id)
 	u32 state;
 	int ret = 0;
 
+#ifdef CONFIG_AMLOGIC_USB
+	command = xhci_alloc_command(xhci, true, GFP_ATOMIC);
+#else
 	command = xhci_alloc_command(xhci, true, GFP_KERNEL);
+#endif
 	if (!command)
 		return -ENOMEM;
 
@@ -5204,6 +5380,12 @@ int xhci_gen_setup(struct usb_hcd *hcd, xhci_get_quirks_t get_quirks)
 
 	xhci = hcd_to_xhci(hcd);
 
+#ifdef CONFIG_AMLOGIC_USB
+	/* CRG_SG_NUM */
+	if (xhci->quirks & XHCI_CRG_HOST_010)
+		hcd->self.sg_tablesize = 4;
+#endif
+
 	if (usb_hcd_is_primary_hcd(hcd)) {
 		xhci->main_hcd = hcd;
 		xhci->usb2_rhub.hcd = hcd;
@@ -5309,10 +5491,17 @@ int xhci_gen_setup(struct usb_hcd *hcd, xhci_get_quirks_t get_quirks)
 
 	/* Set dma_mask and coherent_dma_mask to 64-bits,
 	 * if xHC supports 64-bit addressing */
+#ifdef CONFIG_AMLOGIC_MODIFY
+	if (HCC_64BIT_ADDR(xhci->hcc_params) &&
+			!dma_set_mask(dev, DMA_BIT_MASK(32))) {
+		xhci_dbg(xhci, "Enabling 64-bit DMA addresses.\n");
+		dma_set_coherent_mask(dev, DMA_BIT_MASK(32));
+#else
 	if (HCC_64BIT_ADDR(xhci->hcc_params) &&
 			!dma_set_mask(dev, DMA_BIT_MASK(64))) {
 		xhci_dbg(xhci, "Enabling 64-bit DMA addresses.\n");
 		dma_set_coherent_mask(dev, DMA_BIT_MASK(64));
+#endif
 	} else {
 		/*
 		 * This is to avoid error in cases where a 32-bit USB
@@ -5369,8 +5558,11 @@ static const struct hc_driver xhci_hc_driver = {
 	 * generic hardware linkage
 	 */
 	.irq =			xhci_irq,
+#ifdef CONFIG_AMLOGIC_USB
+	.flags =		HCD_MEMORY | HCD_DMA | HCD_USB3 | HCD_SHARED | HCD_BH,
+#else
 	.flags =		HCD_MEMORY | HCD_DMA | HCD_USB3 | HCD_SHARED,
-
+#endif
 	/*
 	 * basic lifecycle operations
 	 */
@@ -5439,6 +5631,10 @@ void xhci_init_driver(struct hc_driver *drv,
 			drv->reset = over->reset;
 		if (over->start)
 			drv->start = over->start;
+		if (over->add_endpoint)
+			drv->add_endpoint = over->add_endpoint;
+		if (over->drop_endpoint)
+			drv->drop_endpoint = over->drop_endpoint;
 		if (over->check_bandwidth)
 			drv->check_bandwidth = over->check_bandwidth;
 		if (over->reset_bandwidth)

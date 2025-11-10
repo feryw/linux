@@ -27,7 +27,11 @@
 #define ICACHE_POLICY_VIPT	2
 #define ICACHE_POLICY_PIPT	3
 
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
 #define L1_CACHE_SHIFT		(6)
+#else
+#define L1_CACHE_SHIFT		(7)
+#endif /* CONFIG_AMLOGIC_MEMORY_EXTEND */
 #define L1_CACHE_BYTES		(1 << L1_CACHE_SHIFT)
 
 
@@ -46,7 +50,11 @@
  * cache before the transfer is done, causing old data to be seen by
  * the CPU.
  */
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+#define ARCH_DMA_MINALIGN	L1_CACHE_BYTES
+#else
 #define ARCH_DMA_MINALIGN	(128)
+#endif /* CONFIG_AMLOGIC_MEMORY_EXTEND */
 
 #ifdef CONFIG_KASAN_SW_TAGS
 #define ARCH_SLAB_MINALIGN	(1ULL << KASAN_SHADOW_SCALE_SHIFT)

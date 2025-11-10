@@ -9,6 +9,10 @@
 #include <asm/ptrace.h>
 #include <asm/sysreg.h>
 
+#ifdef CONFIG_AMLOGIC_DEBUG_LOCKUP
+#include <linux/amlogic/irqflags_debug_arm64.h>
+#else
+
 /*
  * Aarch64 has flags for masking: Debug, Asynchronous (serror), Interrupts and
  * FIQ exceptions, in the 'daif' register. We mask and unmask them in 'dai'
@@ -127,3 +131,4 @@ static inline void arch_local_irq_restore(unsigned long flags)
 }
 
 #endif /* __ASM_IRQFLAGS_H */
+#endif

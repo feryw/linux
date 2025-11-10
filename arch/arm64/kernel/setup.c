@@ -56,6 +56,12 @@ static struct resource *standard_resources;
 
 phys_addr_t __fdt_pointer __initdata;
 
+const char *machine_name;
+EXPORT_SYMBOL(machine_name);
+
+const char *ce_name;
+EXPORT_SYMBOL(ce_name);
+
 /*
  * Standard memory resources
  */
@@ -192,11 +198,21 @@ static void __init setup_machine_fdt(phys_addr_t dt_phys)
 	fixmap_remap_fdt(dt_phys, &size, PAGE_KERNEL_RO);
 
 	name = of_flat_dt_get_machine_name();
-	if (!name)
-		return;
+	if (name) {
+		machine_name = name;
+		pr_info(" Machine model: %s\n", name);
+		dump_stack_set_arch_desc("%s (DT)", name);
+	}
 
-	pr_info("Machine model: %s\n", name);
-	dump_stack_set_arch_desc("%s (DT)", name);
+	name = of_flat_dt_get_name_dt_id("coreelec-dt-id");
+	if (name) {
+		ce_name = name;
+		pr_info("CoreELEC dt-id: %s\n", name);
+	}
+
+	name = of_flat_dt_get_name_dt_id("amlogic-dt-id");
+	if (name)
+		pr_info(" Amlogic dt-id: %s\n", name);
 }
 
 static void __init request_standard_resources(void)

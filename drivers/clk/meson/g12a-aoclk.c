@@ -12,11 +12,13 @@
 #include <linux/platform_device.h>
 #include <linux/reset-controller.h>
 #include <linux/mfd/syscon.h>
+#include <linux/module.h>
 #include "meson-aoclk.h"
 #include "g12a-aoclk.h"
 
 #include "clk-regmap.h"
 #include "clk-dualdiv.h"
+#include "clkcs_init.h"
 
 /*
  * AO Configuration Clock registers offsets
@@ -378,7 +380,7 @@ static const unsigned int g12a_aoclk_reset[] = {
 	[RESET_AO_IR_OUT]	= 23,
 };
 
-static struct clk_regmap *g12a_aoclk_regmap[] = {
+static struct clk_regmap *g12a_aoclk_regmap[] __initdata = {
 	&g12a_aoclk_ahb,
 	&g12a_aoclk_ir_in,
 	&g12a_aoclk_i2c_m0,
@@ -470,4 +472,13 @@ static struct platform_driver g12a_aoclkc_driver = {
 	},
 };
 
+#ifndef MODULE
 builtin_platform_driver(g12a_aoclkc_driver);
+#else
+int __init meson_g12a_aoclkc_init(void)
+{
+	return platform_driver_register(&g12a_aoclkc_driver);
+}
+#endif
+
+MODULE_LICENSE("GPL v2");

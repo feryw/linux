@@ -313,7 +313,7 @@ static const unsigned int pdm_din2_pins[] = {GPIOA_17};
 static const unsigned int pdm_din3_pins[] = {GPIOA_18};
 
 /* mclk */
-static const unsigned int mclk_c_pins[] = {GPIOA_0};
+static const unsigned int mclk_a_pins[] = {GPIOA_0};
 static const unsigned int mclk_b_pins[] = {GPIOA_1};
 
 /* tdm */
@@ -594,7 +594,7 @@ static struct meson_pmx_group meson_axg_periphs_groups[] = {
 	GROUP(pdm_din1, 1),
 	GROUP(pdm_din2, 1),
 	GROUP(pdm_din3, 1),
-	GROUP(mclk_c, 1),
+	GROUP(mclk_a, 1),
 	GROUP(mclk_b, 1),
 	GROUP(tdmc_sclk, 1),
 	GROUP(tdmc_sclk_slv, 2),
@@ -675,6 +675,17 @@ static const unsigned int jtag_ao_tms_pins[] = {GPIOAO_7};
 /* gen_clk */
 static const unsigned int gen_clk_ee_pins[] = {GPIOAO_13};
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+/* clk12_24 */
+static const unsigned int clk12_24_pins[] = {GPIOAO_12};
+
+/* clk25 */
+static const unsigned int clk25_pins[] = {GPIOAO_13};
+
+/* gen_clk_ao */
+static const unsigned int gen_clk_ao_pins[] = {GPIOAO_13};
+#endif
+
 static struct meson_pmx_group meson_axg_aobus_groups[] = {
 	GPIO_GROUP(GPIOAO_0),
 	GPIO_GROUP(GPIOAO_1),
@@ -722,6 +733,11 @@ static struct meson_pmx_group meson_axg_aobus_groups[] = {
 	GROUP(jtag_ao_clk, 4),
 	GROUP(jtag_ao_tms, 4),
 	GROUP(gen_clk_ee, 4),
+#ifdef CONFIG_AMLOGIC_MODIFY
+	GROUP(gen_clk_ao, 2),
+	GROUP(clk12_24, 1),
+	GROUP(clk25, 1),
+#endif
 };
 
 static const char * const gpio_periphs_groups[] = {
@@ -925,8 +941,8 @@ static const char * const jtag_ao_groups[] = {
 	"jtag_ao_tdi", "jtag_ao_tdo", "jtag_ao_clk", "jtag_ao_tms",
 };
 
-static const char * const mclk_c_groups[] = {
-	"mclk_c",
+static const char * const mclk_a_groups[] = {
+	"mclk_a",
 };
 
 static const char * const mclk_b_groups[] = {
@@ -955,6 +971,20 @@ static const char * const gen_clk_ee_groups[] = {
 	"gen_clk_ee",
 };
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+static const char * const gen_clk_ao_groups[] = {
+	"gen_clk_ao",
+};
+
+static const char * const clk12_24_groups[] = {
+	"clk12_24",
+};
+
+static const char * const clk25_groups[] = {
+	"clk25",
+};
+#endif
+
 static struct meson_pmx_func meson_axg_periphs_functions[] = {
 	FUNCTION(gpio_periphs),
 	FUNCTION(emmc),
@@ -980,8 +1010,8 @@ static struct meson_pmx_func meson_axg_periphs_functions[] = {
 	FUNCTION(spdif_in),
 	FUNCTION(jtag_ee),
 	FUNCTION(pdm),
+	FUNCTION(mclk_a),
 	FUNCTION(mclk_b),
-	FUNCTION(mclk_c),
 	FUNCTION(tdma),
 	FUNCTION(tdmb),
 	FUNCTION(tdmc),
@@ -1001,6 +1031,11 @@ static struct meson_pmx_func meson_axg_aobus_functions[] = {
 	FUNCTION(pwm_ao_d),
 	FUNCTION(jtag_ao),
 	FUNCTION(gen_clk_ee),
+#ifdef CONFIG_AMLOGIC_MODIFY
+	FUNCTION(gen_clk_ao),
+	FUNCTION(clk12_24),
+	FUNCTION(clk25),
+#endif
 };
 
 static struct meson_bank meson_axg_periphs_banks[] = {
@@ -1018,7 +1053,7 @@ static struct meson_bank meson_axg_aobus_banks[] = {
 };
 
 static struct meson_pmx_bank meson_axg_periphs_pmx_banks[] = {
-	/*	 name	 first		lask	   reg	offset  */
+	/*	 name	 first		last	   reg	offset  */
 	BANK_PMX("Z",	 GPIOZ_0, GPIOZ_10, 0x2, 0),
 	BANK_PMX("BOOT", BOOT_0,  BOOT_14,  0x0, 0),
 	BANK_PMX("A",	 GPIOA_0, GPIOA_20, 0xb, 0),
@@ -1066,6 +1101,7 @@ static struct meson_pinctrl_data meson_axg_aobus_pinctrl_data = {
 	.num_banks	= ARRAY_SIZE(meson_axg_aobus_banks),
 	.pmx_ops	= &meson_axg_pmx_ops,
 	.pmx_data	= &meson_axg_aobus_pmx_banks_data,
+	.parse_dt	= meson8_aobus_parse_dt_extra,
 };
 
 static const struct of_device_id meson_axg_pinctrl_dt_match[] = {
@@ -1088,4 +1124,12 @@ static struct platform_driver meson_axg_pinctrl_driver = {
 	},
 };
 
+#ifndef CONFIG_AMLOGIC_MODIFY
 builtin_platform_driver(meson_axg_pinctrl_driver);
+#else
+static int __init meson_axg_pinctrl_init(void)
+{
+	return platform_driver_register(&meson_axg_pinctrl_driver);
+}
+arch_initcall(meson_axg_pinctrl_init);
+#endif

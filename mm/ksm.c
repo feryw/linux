@@ -2133,6 +2133,17 @@ static void cmp_and_merge_page(struct page *page, struct rmap_item *rmap_item)
 	}
 	tree_rmap_item =
 		unstable_tree_search_insert(rmap_item, page, &tree_page);
+#ifdef CONFIG_AMLOGIC_CMA
+	/*
+	 * Now page is inserted to unstable tree, but do not
+	 * let cma page to be kpage, it can be merged with other pages
+	 */
+	if (cma_page(page)) {
+		if (tree_rmap_item)
+			put_page(tree_page);
+		return;
+	}
+#endif /* CONFIG_AMLOGIC_CMA */
 	if (tree_rmap_item) {
 		bool split;
 
@@ -2660,31 +2671,6 @@ again:
 		goto again;
 }
 
-bool reuse_ksm_page(struct page *page,
-		    struct vm_area_struct *vma,
-		    unsigned long address)
-{
-#ifdef CONFIG_DEBUG_VM
-	if (WARN_ON(is_zero_pfn(page_to_pfn(page))) ||
-			WARN_ON(!page_mapped(page)) ||
-			WARN_ON(!PageLocked(page))) {
-		dump_page(page, "reuse_ksm_page");
-		return false;
-	}
-#endif
-
-	if (PageSwapCache(page) || !page_stable_node(page))
-		return false;
-	/* Prohibit parallel get_ksm_page() */
-	if (!page_ref_freeze(page, 1))
-		return false;
-
-	page_move_anon_rmap(page, vma);
-	page->index = linear_page_index(vma, address);
-	page_ref_unfreeze(page, 1);
-
-	return true;
-}
 #ifdef CONFIG_MIGRATION
 void ksm_migrate_page(struct page *newpage, struct page *oldpage)
 {

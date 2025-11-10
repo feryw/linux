@@ -734,6 +734,7 @@ config REGULATOR_QCOM_RPM
 config REGULATOR_QCOM_RPMH
 	tristate "Qualcomm Technologies, Inc. RPMh regulator driver"
 	depends on QCOM_RPMH || COMPILE_TEST
+	depends on QCOM_COMMAND_DB || !QCOM_COMMAND_DB
 	help
 	  This driver supports control of PMIC regulators via the RPMh hardware
 	  block found on Qualcomm Technologies Inc. SoCs.  RPMh regulator
@@ -949,6 +950,16 @@ config REGULATOR_TPS62360
 	select REGMAP_I2C
 	help
 	  This driver supports TPS6236x voltage regulator chip. This
+	  regulator is meant for processor core supply. This chip is
+	  high-frequency synchronous step down dc-dc converter optimized
+	  for battery-powered portable applications.
+
+config REGULATOR_TPS62864
+	tristate "TI TPS6286x Power Regulator"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  This driver supports TPS6286x voltage regulator chip. This
 	  regulator is meant for processor core supply. This chip is
 	  high-frequency synchronous step down dc-dc converter optimized
 	  for battery-powered portable applications.

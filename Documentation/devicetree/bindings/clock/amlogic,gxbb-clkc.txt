@@ -12,6 +12,17 @@ Required Properties:
 		"amlogic,g12a-clkc" for G12A SoC.
 		"amlogic,g12b-clkc" for G12B SoC.
 		"amlogic,sm1-clkc" for SM1 SoC.
+		"amlogic,tm2-clkc" for TM2 SoC.
+		"amlogic,sc2-clkc" for SC2 SoC.
+		"amlogic,t5d-clkc" for t5d SoC.
+		"amlogic,t5d-periph-clkc" for t5d SoC.
+		"amlogic,t7-clkc" for T7 SoC.
+		"amlogic,s4-clkc" for S4 SoC.
+		"amlogic,s4d-clkc" for S4D SoC.
+		"amlogic,t3-clkc" for T3 SoC.
+		"amlogic,p1-clkc" for P1 SoC.
+		"amlogic,t5w-clkc" for T5W SoC.
+		"amlogic,a5-clkc" for A5 SoC.
 - clocks : list of clock phandle, one for each entry clock-names.
 - clock-names : should contain the following:
   * "xtal": the platform xtal

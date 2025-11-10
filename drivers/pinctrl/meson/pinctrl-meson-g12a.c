@@ -10,6 +10,7 @@
 #include <dt-bindings/gpio/meson-g12a-gpio.h>
 #include "pinctrl-meson.h"
 #include "pinctrl-meson-axg-pmx.h"
+#include "pinctrl-module-init.h"
 
 static const struct pinctrl_pin_desc meson_g12a_periphs_pins[] = {
 	MESON_PIN(GPIOZ_0),
@@ -296,18 +297,18 @@ static const unsigned int jtag_b_tdi_pins[]		= { GPIOC_1 };
 static const unsigned int jtag_b_clk_pins[]		= { GPIOC_4 };
 static const unsigned int jtag_b_tms_pins[]		= { GPIOC_5 };
 
-/* bt565_a */
-static const unsigned int bt565_a_vs_pins[]		= { GPIOZ_0 };
-static const unsigned int bt565_a_hs_pins[]		= { GPIOZ_1 };
-static const unsigned int bt565_a_clk_pins[]		= { GPIOZ_3 };
-static const unsigned int bt565_a_din0_pins[]		= { GPIOZ_4 };
-static const unsigned int bt565_a_din1_pins[]		= { GPIOZ_5 };
-static const unsigned int bt565_a_din2_pins[]		= { GPIOZ_6 };
-static const unsigned int bt565_a_din3_pins[]		= { GPIOZ_7 };
-static const unsigned int bt565_a_din4_pins[]		= { GPIOZ_8 };
-static const unsigned int bt565_a_din5_pins[]		= { GPIOZ_9 };
-static const unsigned int bt565_a_din6_pins[]		= { GPIOZ_10 };
-static const unsigned int bt565_a_din7_pins[]		= { GPIOZ_11 };
+/* bt656_a */
+static const unsigned int bt656_a_vs_pins[]		= { GPIOZ_0 };
+static const unsigned int bt656_a_hs_pins[]		= { GPIOZ_1 };
+static const unsigned int bt656_a_clk_pins[]		= { GPIOZ_3 };
+static const unsigned int bt656_a_din0_pins[]		= { GPIOZ_4 };
+static const unsigned int bt656_a_din1_pins[]		= { GPIOZ_5 };
+static const unsigned int bt656_a_din2_pins[]		= { GPIOZ_6 };
+static const unsigned int bt656_a_din3_pins[]		= { GPIOZ_7 };
+static const unsigned int bt656_a_din4_pins[]		= { GPIOZ_8 };
+static const unsigned int bt656_a_din5_pins[]		= { GPIOZ_9 };
+static const unsigned int bt656_a_din6_pins[]		= { GPIOZ_10 };
+static const unsigned int bt656_a_din7_pins[]		= { GPIOZ_11 };
 
 /* tsin_a */
 static const unsigned int tsin_a_valid_pins[]		= { GPIOX_2 };
@@ -433,7 +434,42 @@ static const unsigned int tdm_c_dout1_z_pins[]		= { GPIOZ_3 };
 static const unsigned int tdm_c_dout2_z_pins[]		= { GPIOZ_4 };
 static const unsigned int tdm_c_dout3_z_pins[]		= { GPIOZ_5 };
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+/* gen_clk_ee */
+static const unsigned int gen_clk_ee_x_pins[]		= { GPIOX_19 };
+static const unsigned int gen_clk_ee_z_pins[]		= { GPIOZ_13 };
+
+/* introduce extra ee pin-groups for G12B based on G12A */
+
+/* ir_out */
+static const unsigned int remote_out_h_pins[]		= { GPIOH_6 };
+static const unsigned int remote_out_z_pins[]		= { GPIOZ_10 };
+
+/* pwm_b */
+static const unsigned int pwm_b_h_pins[]		= { GPIOH_7 };
+static const unsigned int pwm_b_z0_pins[]		= { GPIOZ_0 };
+static const unsigned int pwm_b_z13_pins[]		= { GPIOZ_13 };
+
+/* pwm_c */
+static const unsigned int pwm_c_z_pins[]		= { GPIOZ_1 };
+
+/* pwm_d */
+static const unsigned int pwm_d_z_pins[]		= { GPIOZ_2 };
+static const unsigned int pwm_d_a4_pins[]		= { GPIOA_4 };
+
+/* pwm_f */
+static const unsigned int pwm_f_z_pins[]		= { GPIOZ_12 };
+static const unsigned int pwm_f_a11_pins[]		= { GPIOA_11 };
+
+/* clk12_24_ee */
+static const unsigned int clk12_24_z_pins[]		= { GPIOZ_13 };
+#endif
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+static struct meson_pmx_group meson_g12a_periphs_groups[] __initdata = {
+#else
 static struct meson_pmx_group meson_g12a_periphs_groups[] = {
+#endif
 	GPIO_GROUP(GPIOZ_0),
 	GPIO_GROUP(GPIOZ_1),
 	GPIO_GROUP(GPIOZ_2),
@@ -577,17 +613,17 @@ static struct meson_pmx_group meson_g12a_periphs_groups[] = {
 	GROUP(eth_txd3_rgmii,		1),
 	GROUP(eth_link_led,		1),
 	GROUP(eth_act_led,		1),
-	GROUP(bt565_a_vs,		2),
-	GROUP(bt565_a_hs,		2),
-	GROUP(bt565_a_clk,		2),
-	GROUP(bt565_a_din0,		2),
-	GROUP(bt565_a_din1,		2),
-	GROUP(bt565_a_din2,		2),
-	GROUP(bt565_a_din3,		2),
-	GROUP(bt565_a_din4,		2),
-	GROUP(bt565_a_din5,		2),
-	GROUP(bt565_a_din6,		2),
-	GROUP(bt565_a_din7,		2),
+	GROUP(bt656_a_vs,		2),
+	GROUP(bt656_a_hs,		2),
+	GROUP(bt656_a_clk,		2),
+	GROUP(bt656_a_din0,		2),
+	GROUP(bt656_a_din1,		2),
+	GROUP(bt656_a_din2,		2),
+	GROUP(bt656_a_din3,		2),
+	GROUP(bt656_a_din4,		2),
+	GROUP(bt656_a_din5,		2),
+	GROUP(bt656_a_din6,		2),
+	GROUP(bt656_a_din7,		2),
 	GROUP(tsin_b_valid_z,		3),
 	GROUP(tsin_b_sop_z,		3),
 	GROUP(tsin_b_din0_z,		3),
@@ -618,6 +654,16 @@ static struct meson_pmx_group meson_g12a_periphs_groups[] = {
 	GROUP(tdm_c_dout2_z,		4),
 	GROUP(tdm_c_dout3_z,		4),
 	GROUP(mclk1_z,			4),
+#ifdef CONFIG_AMLOGIC_MODIFY
+	GROUP(gen_clk_ee_z,		7),
+	GROUP(remote_out_z,		5),
+	GROUP(pwm_b_z0,			5),
+	GROUP(pwm_b_z13,		5),
+	GROUP(pwm_c_z,			5),
+	GROUP(pwm_d_z,			2),
+	GROUP(pwm_f_z,			5),
+	GROUP(clk12_24_z,		2),
+#endif
 
 	/* bank GPIOX */
 	GROUP(sdio_d0,			1),
@@ -673,6 +719,9 @@ static struct meson_pmx_group meson_g12a_periphs_groups[] = {
 	GROUP(tdm_a_dout0,		1),
 	GROUP(tdm_a_dout1,		1),
 	GROUP(mclk1_x,			2),
+#ifdef CONFIG_AMLOGIC_MODIFY
+	GROUP(gen_clk_ee_x,		7),
+#endif
 
 	/* bank GPIOC */
 	GROUP(sdcard_d0_c,		1),
@@ -729,6 +778,10 @@ static struct meson_pmx_group meson_g12a_periphs_groups[] = {
 	GROUP(spdif_in_h,		1),
 	GROUP(tdm_b_din3_h,		6),
 	GROUP(tdm_b_dout3_h,		5),
+#ifdef CONFIG_AMLOGIC_MODIFY
+	GROUP(remote_out_h,		5),
+	GROUP(pwm_b_h,			5),
+#endif
 
 	/* bank GPIOA */
 	GROUP(i2c3_sda_a,		2),
@@ -768,6 +821,10 @@ static struct meson_pmx_group meson_g12a_periphs_groups[] = {
 	GROUP(tdm_c_dout3_a,		2),
 	GROUP(mclk0_a,			1),
 	GROUP(mclk1_a,			2),
+#ifdef CONFIG_AMLOGIC_MODIFY
+	GROUP(pwm_d_a4,			3),
+	GROUP(pwm_f_a11,		3),
+#endif
 };
 
 /* uart_ao_a */
@@ -855,7 +912,34 @@ static const unsigned int tdm_ao_b_dout2_pins[]		= { GPIOAO_6 };
 /* mclk0_ao */
 static const unsigned int mclk0_ao_pins[]		= { GPIOAO_9 };
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+/* gen_clk_ee_ao */
+static const unsigned int gen_clk_ee_ao_pins[]		= { GPIOAO_11 };
+
+/* gen_clk_ao */
+static const unsigned int gen_clk_ao_pins[]		= { GPIOAO_11 };
+
+/* clk12_24_ao */
+static const unsigned int clk12_24_ao_pins[]		= { GPIOAO_10 };
+static const unsigned int clk12_24_e_pins[]		= { GPIOE_2 };
+
+/* clk25 */
+static const unsigned int clk25_pins[]			= { GPIOE_2 };
+
+/* introduce extra ao pin-groups for G12B based on G12A */
+
+/* ir_out */
+static const unsigned int remote_out_ao9_pins[]		= { GPIOAO_9 };
+
+/* pwm_a_gpioe */
+static const unsigned int pwm_a_e2_pins[]		= { GPIOE_2 };
+#endif
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+static struct meson_pmx_group meson_g12a_aobus_groups[] __initdata = {
+#else
 static struct meson_pmx_group meson_g12a_aobus_groups[] = {
+#endif
 	GPIO_GROUP(GPIOAO_0),
 	GPIO_GROUP(GPIOAO_1),
 	GPIO_GROUP(GPIOAO_2),
@@ -923,6 +1007,15 @@ static struct meson_pmx_group meson_g12a_aobus_groups[] = {
 	GROUP(tdm_ao_b_slv_fs,		6),
 	GROUP(tdm_ao_b_slv_sclk,	6),
 	GROUP(mclk0_ao,			5),
+#ifdef CONFIG_AMLOGIC_MODIFY
+	GROUP(gen_clk_ee_ao,		4),
+	GROUP(gen_clk_ao,		5),
+	GROUP(clk12_24_ao,		7),
+	GROUP(clk12_24_e,		1),
+	GROUP(clk25,			2),
+	GROUP(remote_out_ao9,		2),
+	GROUP(pwm_a_e2,			3),
+#endif
 };
 
 static const char * const gpio_periphs_groups[] = {
@@ -1054,14 +1147,23 @@ static const char * const pwm_a_groups[] = {
 
 static const char * const pwm_b_groups[] = {
 	"pwm_b_x7", "pwm_b_x19",
+#ifdef CONFIG_AMLOGIC_MODIFY
+	"pwm_b_h", "pwm_b_z0", "pwm_b_z13",
+#endif
 };
 
 static const char * const pwm_c_groups[] = {
 	"pwm_c_c", "pwm_c_x5", "pwm_c_x8",
+#ifdef CONFIG_AMLOGIC_MODIFY
+	"pwm_c_z",
+#endif
 };
 
 static const char * const pwm_d_groups[] = {
 	"pwm_d_x3", "pwm_d_x6",
+#ifdef CONFIG_AMLOGIC_MODIFY
+	"pwm_d_z", "pwm_d_a4",
+#endif
 };
 
 static const char * const pwm_e_groups[] = {
@@ -1070,6 +1172,9 @@ static const char * const pwm_e_groups[] = {
 
 static const char * const pwm_f_groups[] = {
 	"pwm_f_x", "pwm_f_h",
+#ifdef CONFIG_AMLOGIC_MODIFY
+	"pwm_f_z", "pwm_f_a11",
+#endif
 };
 
 static const char * const cec_ao_a_h_groups[] = {
@@ -1084,11 +1189,11 @@ static const char * const jtag_b_groups[] = {
 	"jtag_b_tdi", "jtag_b_tdo", "jtag_b_clk", "jtag_b_tms",
 };
 
-static const char * const bt565_a_groups[] = {
-	"bt565_a_vs", "bt565_a_hs", "bt565_a_clk",
-	"bt565_a_din0", "bt565_a_din1", "bt565_a_din2",
-	"bt565_a_din3", "bt565_a_din4", "bt565_a_din5",
-	"bt565_a_din6", "bt565_a_din7",
+static const char * const bt656_a_groups[] = {
+	"bt656_a_vs", "bt656_a_hs", "bt656_a_clk",
+	"bt656_a_din0", "bt656_a_din1", "bt656_a_din2",
+	"bt656_a_din3", "bt656_a_din4", "bt656_a_din5",
+	"bt656_a_din6", "bt656_a_din7",
 };
 
 static const char * const tsin_a_groups[] = {
@@ -1162,6 +1267,20 @@ static const char * const tdm_c_groups[] = {
 	"tdm_c_dout2_z", "tdm_c_dout3_z",
 };
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+static const char * const gen_clk_ee_groups[] = {
+	"gen_clk_ee_x", "gen_clk_ee_z",
+};
+
+static const char * const remote_out_groups[] = {
+	"remote_out_h", "remote_out_z",
+};
+
+static const char * const clk12_24_ee_groups[] = {
+	"clk12_24_z",
+};
+#endif
+
 static const char * const gpio_aobus_groups[] = {
 	"GPIOAO_0", "GPIOAO_1", "GPIOAO_2", "GPIOAO_3", "GPIOAO_4",
 	"GPIOAO_5", "GPIOAO_6", "GPIOAO_7", "GPIOAO_8", "GPIOAO_9",
@@ -1194,6 +1313,9 @@ static const char * const remote_ao_input_groups[] = {
 
 static const char * const remote_ao_out_groups[] = {
 	"remote_ao_out",
+#ifdef CONFIG_AMLOGIC_MODIFY
+	"remote_out_ao9",
+#endif
 };
 
 static const char * const pwm_a_e_groups[] = {
@@ -1248,7 +1370,33 @@ static const char * const mclk0_ao_groups[] = {
 	"mclk0_ao",
 };
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+static const char * const gen_clk_ee_ao_groups[] = {
+	"gen_clk_ee_ao",
+};
+
+static const char * const gen_clk_ao_groups[] = {
+	"gen_clk_ao",
+};
+
+static const char * const clk12_24_ao_groups[] = {
+	"clk12_24_ao", "clk12_24_e",
+};
+
+static const char * const clk25_groups[] = {
+	"clk25",
+};
+
+static const char * const pwm_a_gpioe_groups[] = {
+	"pwm_a_e2",
+};
+#endif
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+static struct meson_pmx_func meson_g12a_periphs_functions[] __initdata = {
+#else
 static struct meson_pmx_func meson_g12a_periphs_functions[] = {
+#endif
 	FUNCTION(gpio_periphs),
 	FUNCTION(emmc),
 	FUNCTION(nor),
@@ -1276,7 +1424,7 @@ static struct meson_pmx_func meson_g12a_periphs_functions[] = {
 	FUNCTION(cec_ao_a_h),
 	FUNCTION(cec_ao_b_h),
 	FUNCTION(jtag_b),
-	FUNCTION(bt565_a),
+	FUNCTION(bt656_a),
 	FUNCTION(tsin_a),
 	FUNCTION(tsin_b),
 	FUNCTION(hdmitx),
@@ -1288,9 +1436,18 @@ static struct meson_pmx_func meson_g12a_periphs_functions[] = {
 	FUNCTION(tdm_a),
 	FUNCTION(tdm_b),
 	FUNCTION(tdm_c),
+#ifdef CONFIG_AMLOGIC_MODIFY
+	FUNCTION(gen_clk_ee),
+	FUNCTION(remote_out),
+	FUNCTION(clk12_24_ee),
+#endif
 };
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+static struct meson_pmx_func meson_g12a_aobus_functions[] __initdata = {
+#else
 static struct meson_pmx_func meson_g12a_aobus_functions[] = {
+#endif
 	FUNCTION(gpio_aobus),
 	FUNCTION(uart_ao_a),
 	FUNCTION(uart_ao_b),
@@ -1310,6 +1467,13 @@ static struct meson_pmx_func meson_g12a_aobus_functions[] = {
 	FUNCTION(spdif_ao_out),
 	FUNCTION(tdm_ao_b),
 	FUNCTION(mclk0_ao),
+#ifdef CONFIG_AMLOGIC_MODIFY
+	FUNCTION(gen_clk_ee_ao),
+	FUNCTION(gen_clk_ao),
+	FUNCTION(clk12_24_ao),
+	FUNCTION(clk25),
+	FUNCTION(pwm_a_gpioe),
+#endif
 };
 
 static struct meson_bank meson_g12a_periphs_banks[] = {
@@ -1338,7 +1502,7 @@ static struct meson_bank meson_g12a_aobus_banks[] = {
 };
 
 static struct meson_pmx_bank meson_g12a_periphs_pmx_banks[] = {
-	/*	 name	 first		lask	   reg	offset  */
+	/*	 name	 first		last	   reg	offset  */
 	BANK_PMX("Z",    GPIOZ_0, GPIOZ_15, 0x6, 0),
 	BANK_PMX("H",    GPIOH_0, GPIOH_8,  0xb, 0),
 	BANK_PMX("BOOT", BOOT_0,  BOOT_15,  0x0, 0),
@@ -1362,7 +1526,21 @@ static struct meson_axg_pmx_data meson_g12a_aobus_pmx_banks_data = {
 	.num_pmx_banks	= ARRAY_SIZE(meson_g12a_aobus_pmx_banks),
 };
 
+#ifndef CONFIG_AMLOGIC_MODIFY
+static int meson_g12a_aobus_parse_dt_extra(struct meson_pinctrl *pc)
+{
+	pc->reg_pull = pc->reg_gpio;
+	pc->reg_pullen = pc->reg_gpio;
+
+	return 0;
+}
+#endif
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+static struct meson_pinctrl_data meson_g12a_periphs_pinctrl_data __refdata = {
+#else
 static struct meson_pinctrl_data meson_g12a_periphs_pinctrl_data = {
+#endif
 	.name		= "periphs-banks",
 	.pins		= meson_g12a_periphs_pins,
 	.groups		= meson_g12a_periphs_groups,
@@ -1376,7 +1554,11 @@ static struct meson_pinctrl_data meson_g12a_periphs_pinctrl_data = {
 	.pmx_data	= &meson_g12a_periphs_pmx_banks_data,
 };
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+static struct meson_pinctrl_data meson_g12a_aobus_pinctrl_data __refdata = {
+#else
 static struct meson_pinctrl_data meson_g12a_aobus_pinctrl_data = {
+#endif
 	.name		= "aobus-banks",
 	.pins		= meson_g12a_aobus_pins,
 	.groups		= meson_g12a_aobus_groups,
@@ -1388,6 +1570,7 @@ static struct meson_pinctrl_data meson_g12a_aobus_pinctrl_data = {
 	.num_banks	= ARRAY_SIZE(meson_g12a_aobus_banks),
 	.pmx_ops	= &meson_axg_pmx_ops,
 	.pmx_data	= &meson_g12a_aobus_pmx_banks_data,
+	.parse_dt	= meson_g12a_aobus_parse_dt_extra,
 };
 
 static const struct of_device_id meson_g12a_pinctrl_dt_match[] = {
@@ -1410,4 +1593,20 @@ static struct platform_driver meson_g12a_pinctrl_driver = {
 	},
 };
 
+#ifndef CONFIG_AMLOGIC_MODIFY
 builtin_platform_driver(meson_g12a_pinctrl_driver);
+#else
+#ifndef MODULE
+static int __init meson_g12a_pinctrl_init(void)
+{
+	return platform_driver_register(&meson_g12a_pinctrl_driver);
+}
+arch_initcall(meson_g12a_pinctrl_init);
+
+#else
+int __init meson_g12a_pinctrl_init(void)
+{
+	return platform_driver_register(&meson_g12a_pinctrl_driver);
+}
+#endif
+#endif

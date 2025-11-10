@@ -785,7 +785,14 @@ static int get_phy_id(struct mii_bus *bus, int addr, u32 *phy_id,
 
 	if (is_c45)
 		return get_phy_c45_ids(bus, addr, phy_id, c45_ids);
-
+#ifdef CONFIG_MAXIO_PHY
+	/*
+	 *An MDIO connects to multiple PHYs requiring write before read.
+	 *This operation does not affect one MDIO connected to a single PHY
+	 *MII_PHYSID2 is a read-only register and writine to it has no effect
+	 */
+	mdiobus_write(bus,addr,MII_PHYSID2,0);
+#endif
 	/* Grab the bits from PHYIR1, and put them in the upper half */
 	phy_reg = mdiobus_read(bus, addr, MII_PHYSID1);
 	if (phy_reg < 0) {
@@ -1829,6 +1836,13 @@ int genphy_read_lpa(struct phy_device *phydev)
 							lpagb);
 		}
 
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+		lpa = phy_read(phydev, MII_ADVERTISE);
+		if (lpa < 0)
+			return lpa;
+
+		mii_lpa_mod_linkmode_lpa_t(phydev->advertising, lpa);
+#endif
 		lpa = phy_read(phydev, MII_LPA);
 		if (lpa < 0)
 			return lpa;
@@ -2238,6 +2252,8 @@ static int phy_probe(struct device *dev)
 			       phydev->supported))
 		phydev->autoneg = 0;
 
+	of_set_phy_supported(phydev);
+
 	if (linkmode_test_bit(ETHTOOL_LINK_MODE_1000baseT_Half_BIT,
 			      phydev->supported))
 		phydev->is_gigabit_capable = 1;
@@ -2245,7 +2261,6 @@ static int phy_probe(struct device *dev)
 			      phydev->supported))
 		phydev->is_gigabit_capable = 1;
 
-	of_set_phy_supported(phydev);
 	phy_advertise_supported(phydev);
 
 	/* Get the EEE modes we want to prohibit. We will ask

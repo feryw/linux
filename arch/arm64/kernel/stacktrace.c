@@ -17,6 +17,10 @@
 #include <asm/stack_pointer.h>
 #include <asm/stacktrace.h>
 
+#ifdef CONFIG_AMLOGIC_VMAP
+#include <linux/amlogic/vmap_stack.h>
+#endif
+
 /*
  * AArch64 PCS assigns the frame pointer to x29.
  *
@@ -136,7 +140,7 @@ struct stack_trace_data {
 	unsigned int skip;
 };
 
-static int save_trace(struct stackframe *frame, void *d)
+static int notrace save_trace(struct stackframe *frame, void *d)
 {
 	struct stack_trace_data *data = d;
 	struct stack_trace *trace = data->trace;
@@ -168,8 +172,9 @@ void save_stack_trace_regs(struct pt_regs *regs, struct stack_trace *trace)
 }
 EXPORT_SYMBOL_GPL(save_stack_trace_regs);
 
-static noinline void __save_stack_trace(struct task_struct *tsk,
-	struct stack_trace *trace, unsigned int nosched)
+static noinline notrace void __save_stack_trace(struct task_struct *tsk,
+						struct stack_trace *trace,
+						unsigned int nosched)
 {
 	struct stack_trace_data data;
 	struct stackframe frame;
@@ -198,12 +203,13 @@ static noinline void __save_stack_trace(struct task_struct *tsk,
 }
 EXPORT_SYMBOL_GPL(save_stack_trace_tsk);
 
-void save_stack_trace_tsk(struct task_struct *tsk, struct stack_trace *trace)
+void notrace save_stack_trace_tsk(struct task_struct *tsk,
+				  struct stack_trace *trace)
 {
 	__save_stack_trace(tsk, trace, 1);
 }
 
-void save_stack_trace(struct stack_trace *trace)
+void notrace save_stack_trace(struct stack_trace *trace)
 {
 	__save_stack_trace(current, trace, 0);
 }

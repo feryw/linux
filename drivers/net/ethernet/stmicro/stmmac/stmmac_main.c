@@ -30,6 +30,9 @@
 #include <linux/slab.h>
 #include <linux/prefetch.h>
 #include <linux/pinctrl/consumer.h>
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+#include "../../../../amlogic/ethernet/phy/phy_debug.h"
+#endif
 #ifdef CONFIG_DEBUG_FS
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
@@ -48,6 +51,43 @@
 #define	STMMAC_ALIGN(x)		ALIGN(ALIGN(x, SMP_CACHE_BYTES), 16)
 #define	TSO_MAX_BUFF_SIZE	(SZ_16K - 1)
 
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+struct phylink {
+       /* private: */
+	struct net_device *netdev;
+	const struct phylink_mac_ops *ops;
+	struct phylink_config *config;
+	struct device *dev;
+	unsigned int old_link_state:1;
+	unsigned long phylink_disable_state; /* bitmask of disables */
+	struct phy_device *phydev;
+	phy_interface_t link_interface; /* PHY_INTERFACE_xxx */
+	u8 link_an_mode;                /* MLO_AN_xxx */
+	u8 link_port;                   /* The current non-phy ethtool port */
+	__ETHTOOL_DECLARE_LINK_MODE_MASK(supported);
+
+	/* The link configuration settings */
+	struct phylink_link_state link_config;
+
+	/* The current settings */
+	phy_interface_t cur_interface;
+
+	struct gpio_desc *link_gpio;
+	unsigned int link_irq;
+	struct timer_list link_poll;
+	void (*get_fixed_state)(struct net_device *dev,
+				struct phylink_link_state *s);
+	/*code review need comment*/
+	struct mutex state_mutex;
+	struct phylink_link_state phy_state;
+	struct work_struct resolve;
+
+	bool mac_link_dropped;
+
+	struct sfp_bus *sfp_bus;
+};
+
+#endif
 /* Module parameters */
 #define TX_TIMEO	5000
 static int watchdog = TX_TIMEO;
@@ -929,6 +969,11 @@ static void stmmac_mac_link_up(struct phylink_config *config,
 			       struct phy_device *phy)
 {
 	struct stmmac_priv *priv = netdev_priv(to_net_dev(config->dev));
+
+	if (device_may_wakeup(priv->device)) {
+		if (!priv->plat->mdns_wkup)
+			pm_relax(priv->device);
+	}
 
 	stmmac_mac_set(priv, priv->ioaddr, true);
 	if (phy && priv->dma_cap.eee) {
@@ -2728,6 +2773,10 @@ static int stmmac_open(struct net_device *dev)
 	stmmac_enable_all_queues(priv);
 	netif_tx_start_all_queues(priv->dev);
 
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+	ret = gmac_create_sysfs(priv->phylink->phydev, priv->ioaddr);
+#endif
+
 	return 0;
 
 lpiirq_error:
@@ -2793,7 +2842,9 @@ static int stmmac_release(struct net_device *dev)
 	netif_carrier_off(dev);
 
 	stmmac_release_ptp(priv);
-
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+	gmac_remove_sysfs(priv->phylink->phydev);
+#endif
 	return 0;
 }
 
@@ -4662,7 +4713,6 @@ int stmmac_dvr_probe(struct device *device,
 			__func__, ret);
 		goto error_netdev_register;
 	}
-
 #ifdef CONFIG_DEBUG_FS
 	stmmac_init_fs(ndev);
 #endif
@@ -4745,7 +4795,12 @@ int stmmac_suspend(struct device *dev)
 	if (!ndev || !netif_running(ndev))
 		return 0;
 
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+	if (!device_may_wakeup(priv->device))
+		phylink_mac_change(priv->phylink, false);
+#else
 	phylink_mac_change(priv->phylink, false);
+#endif
 
 	mutex_lock(&priv->lock);
 
@@ -4766,8 +4821,16 @@ int stmmac_suspend(struct device *dev)
 
 	/* Enable Power down mode by programming the PMT regs */
 	if (device_may_wakeup(priv->device)) {
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+		pr_info("wzh setup wol\n");
+		if (priv->plat->mdns_wkup)
+			stmmac_pmt(priv, priv->hw, 0x120);
+		else
+			stmmac_pmt(priv, priv->hw, 0x1 << 5);
+#else
 		stmmac_pmt(priv, priv->hw, priv->wolopts);
 		priv->irq_wake = 1;
+#endif
 	} else {
 		mutex_unlock(&priv->lock);
 		rtnl_lock();
@@ -4789,6 +4852,7 @@ int stmmac_suspend(struct device *dev)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(stmmac_suspend);
+#define MAXIO_PHY_MAE0621A_ID 0x7b744411
 
 /**
  * stmmac_reset_queues_param - reset queue parameters
@@ -4861,6 +4925,10 @@ int stmmac_resume(struct device *dev)
 
 	stmmac_free_tx_skbufs(priv);
 	stmmac_clear_descriptors(priv);
+	if (ndev->phydev->drv->config_init) {
+		if (ndev->phydev->phy_id == MAXIO_PHY_MAE0621A_ID)
+			ndev->phydev->drv->config_init(ndev->phydev);
+	}
 
 	stmmac_hw_setup(ndev, false);
 	stmmac_init_coalesce(priv);

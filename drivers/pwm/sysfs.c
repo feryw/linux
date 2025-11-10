@@ -42,7 +42,7 @@ static ssize_t period_show(struct device *child,
 
 	pwm_get_state(pwm, &state);
 
-	return sprintf(buf, "%u\n", state.period);
+	return sprintf(buf, "%llu\n", state.period);
 }
 
 static ssize_t period_store(struct device *child,
@@ -52,10 +52,10 @@ static ssize_t period_store(struct device *child,
 	struct pwm_export *export = child_to_pwm_export(child);
 	struct pwm_device *pwm = export->pwm;
 	struct pwm_state state;
-	unsigned int val;
+	u64 val;
 	int ret;
 
-	ret = kstrtouint(buf, 0, &val);
+	ret = kstrtou64(buf, 0, &val);
 	if (ret)
 		return ret;
 
@@ -77,7 +77,7 @@ static ssize_t duty_cycle_show(struct device *child,
 
 	pwm_get_state(pwm, &state);
 
-	return sprintf(buf, "%u\n", state.duty_cycle);
+	return sprintf(buf, "%llu\n", state.duty_cycle);
 }
 
 static ssize_t duty_cycle_store(struct device *child,
@@ -212,14 +212,79 @@ static ssize_t capture_show(struct device *child,
 	if (ret)
 		return ret;
 
-	return sprintf(buf, "%u %u\n", result.period, result.duty_cycle);
+	return sprintf(buf, "%llu %llu\n", result.period, result.duty_cycle);
 }
+
+static ssize_t output_type_show(struct device *child,
+			     struct device_attribute *attr,
+			     char *buf)
+{
+	const struct pwm_device *pwm = child_to_pwm_device(child);
+	const char *output_type = "unknown";
+	struct pwm_state state;
+
+	pwm_get_state(pwm, &state);
+	switch (state.output_type) {
+	case PWM_OUTPUT_FIXED:
+		output_type = "fixed";
+		break;
+	case PWM_OUTPUT_MODULATED:
+		output_type = "modulated";
+		break;
+	default:
+		break;
+	}
+
+	return snprintf(buf, PAGE_SIZE, "%s\n", output_type);
+}
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+/*
+ * This interface is added to facilitate debugging the voltage-
+ * table in pwm regulator, which can output different percentages
+ * of waveforms in a fixed pwm cycle.
+ * example:
+ * echo 50 100 > sys/class/pwm/pwmchipx/pwmx/relative_duty
+ * output 50% duty pwm
+ */
+static ssize_t relative_duty_store(struct device *child,
+				   struct device_attribute *attr,
+				   const char *buf, size_t size)
+{
+	struct pwm_export *export = child_to_pwm_export(child);
+	struct pwm_device *pwm = export->pwm;
+	struct pwm_state state = pwm->state;
+	int scale, dutycycle, ret;
+
+	ret = sscanf(buf, "%d %d", &dutycycle, &scale);
+	if (ret != 2) {
+		pr_err("Can't parse addr and scale,dutycycle:[dutycycle scale]\n");
+		return -EINVAL;
+	}
+
+	if (!scale || dutycycle > scale) {
+		pr_err("parameter error\n");
+		return -EINVAL;
+	}
+
+	mutex_lock(&export->lock);
+	pwm_set_relative_duty_cycle(&state, dutycycle, scale);
+	ret = pwm_apply_state(pwm, &state);
+	mutex_unlock(&export->lock);
+
+	return ret ? : size;
+}
+#endif
 
 static DEVICE_ATTR_RW(period);
 static DEVICE_ATTR_RW(duty_cycle);
 static DEVICE_ATTR_RW(enable);
 static DEVICE_ATTR_RW(polarity);
 static DEVICE_ATTR_RO(capture);
+static DEVICE_ATTR_RO(output_type);
+#ifdef CONFIG_AMLOGIC_MODIFY
+static DEVICE_ATTR_WO(relative_duty);
+#endif
 
 static struct attribute *pwm_attrs[] = {
 	&dev_attr_period.attr,
@@ -227,6 +292,10 @@ static struct attribute *pwm_attrs[] = {
 	&dev_attr_enable.attr,
 	&dev_attr_polarity.attr,
 	&dev_attr_capture.attr,
+	&dev_attr_output_type.attr,
+#ifdef CONFIG_AMLOGIC_MODIFY
+	&dev_attr_relative_duty.attr,
+#endif
 	NULL
 };
 ATTRIBUTE_GROUPS(pwm);

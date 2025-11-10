@@ -54,6 +54,13 @@ static int one_day_secs = 24 * 3600;
 /* obsolete */
 static int sysctl_tcp_low_latency __read_mostly;
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+static int tcp_delack_seg_min = TCP_DELACK_MIN;
+static int tcp_delack_seg_max = 60;
+static int tcp_use_userconfig_min;
+static int tcp_use_userconfig_max = 1;
+#endif
+
 /* Update system visible IP port range */
 static void set_local_port_range(struct net *net, int range[2])
 {
@@ -604,6 +611,26 @@ static struct ctl_table ipv4_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_do_static_key,
 	},
+#ifdef CONFIG_AMLOGIC_MODIFY
+	{
+		.procname	= "tcp_delack_seg",
+		.data		= &sysctl_tcp_delack_seg,
+		.maxlen		= sizeof(sysctl_tcp_delack_seg),
+		.mode		= 0644,
+		.proc_handler   = tcp_proc_delayed_ack_control,
+		.extra1		= &tcp_delack_seg_min,
+		.extra2		= &tcp_delack_seg_max,
+	},
+	{
+		.procname	= "tcp_use_userconfig",
+		.data	        = &sysctl_tcp_use_userconfig,
+		.maxlen		= sizeof(sysctl_tcp_use_userconfig),
+		.mode		= 0644,
+		.proc_handler	= tcp_use_userconfig_sysctl_handler,
+		.extra1		= &tcp_use_userconfig_min,
+		.extra2		= &tcp_use_userconfig_max,
+	},
+#endif
 	{ }
 };
 
@@ -729,6 +756,13 @@ static struct ctl_table ipv4_net_table[] = {
 	{
 		.procname	= "ip_local_reserved_ports",
 		.data		= &init_net.ipv4.sysctl_local_reserved_ports,
+		.maxlen		= 65536,
+		.mode		= 0644,
+		.proc_handler	= proc_do_large_bitmap,
+	},
+	{
+		.procname	= "ip_local_unbindable_ports",
+		.data		= &init_net.ipv4.sysctl_local_unbindable_ports,
 		.maxlen		= 65536,
 		.mode		= 0644,
 		.proc_handler	= proc_do_large_bitmap,
@@ -1341,11 +1375,17 @@ static __net_init int ipv4_sysctl_init_net(struct net *net)
 
 	net->ipv4.sysctl_local_reserved_ports = kzalloc(65536 / 8, GFP_KERNEL);
 	if (!net->ipv4.sysctl_local_reserved_ports)
-		goto err_ports;
+		goto err_reserved_ports;
+
+	net->ipv4.sysctl_local_unbindable_ports = kzalloc(65536 / 8, GFP_KERNEL);
+	if (!net->ipv4.sysctl_local_unbindable_ports)
+		goto err_unbindable_ports;
 
 	return 0;
 
-err_ports:
+err_unbindable_ports:
+	kfree(net->ipv4.sysctl_local_reserved_ports);
+err_reserved_ports:
 	unregister_net_sysctl_table(net->ipv4.ipv4_hdr);
 err_reg:
 	if (!net_eq(net, &init_net))
@@ -1358,6 +1398,7 @@ static __net_exit void ipv4_sysctl_exit_net(struct net *net)
 {
 	struct ctl_table *table;
 
+	kfree(net->ipv4.sysctl_local_unbindable_ports);
 	kfree(net->ipv4.sysctl_local_reserved_ports);
 	table = net->ipv4.ipv4_hdr->ctl_table_arg;
 	unregister_net_sysctl_table(net->ipv4.ipv4_hdr);

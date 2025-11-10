@@ -13,6 +13,10 @@
 #include <linux/phy.h>
 #include <linux/netdevice.h>
 #include <linux/bitfield.h>
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+#include "../../amlogic/ethernet/phy/phy_debug.h"
+#define MAILBOX_SUPPORT	0x0
+#endif
 
 #define TSTCNTL		20
 #define  TSTCNTL_READ		BIT(15)
@@ -139,6 +143,72 @@ static int meson_gxl_config_init(struct phy_device *phydev)
 	return 0;
 }
 
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+/*tx_amp*/
+static int custom_internal_config(struct phy_device *phydev)
+{
+	unsigned int efuse_valid = 0;
+	unsigned int efuse_amp = 0;
+	unsigned int setup_amp = 0;
+
+	pr_info("custom_internal_config\n");
+	/*we will setup env tx_amp first to debug,
+	 *if env tx_amp ==0 we will use the efuse
+	 */
+	/*use reg from bl2 sc2 t5 use this method*/
+	if (enet_type == 3 || enet_type == 4 || enet_type == 5)
+		efuse_amp = tx_amp_bl2;
+/*mailbox scpi_get_ethernet_calc() function*/
+/*only support sc2 t5d tx_amp method by now*/
+#if MAILBOX_SUPPORT
+	else
+		efuse_amp = scpi_get_ethernet_calc();
+
+	pr_info("efuse tx_amp = %x\n", efuse_amp);
+	if (is_meson_g12b_cpu() && is_meson_rev_a()) {
+		efuse_valid = (efuse_amp >> 3);
+		efuse_amp = efuse_amp & 0x7;
+	} else {
+		efuse_valid = ((efuse_amp >> 4) & 0x3);
+		efuse_amp = efuse_amp & 0xf;
+	}
+#else
+	if (enet_type == ETH_PHY_T5)
+		efuse_valid = ((efuse_amp >> 5) & 0x1);
+	else
+		efuse_valid = ((efuse_amp >> 4) & 0x3);
+	/*0715-2021 define bit3 as enhance bit as HW requirement
+	 *reduce steps down to 8 from 16
+	 */
+	efuse_amp = efuse_amp & 0x7;
+#endif
+	if (efuse_valid) {
+		/* efuse is valid but env not*/
+		setup_amp = efuse_amp;
+		/*Enable Analog and DSP register Bank access by*/
+		phy_write(phydev, 0x14, 0x0000);
+		phy_write(phydev, 0x14, 0x0400);
+		phy_write(phydev, 0x14, 0x0000);
+		phy_write(phydev, 0x14, 0x0400);
+		phy_write(phydev, 0x17, setup_amp);
+		phy_write(phydev, 0x14, 0x4418);
+		pr_info("set phy setup_amp = %d\n", setup_amp);
+	} else {
+		/*env not set, efuse not valid return*/
+		pr_info("env not set, efuse also invalid\n");
+	}
+	/*rx currents for t5/t5d only by now*/
+	if (enet_type == ETH_PHY_T5) {
+		phy_write(phydev, 0x14, 0x0000);
+		phy_write(phydev, 0x14, 0x0400);
+		phy_write(phydev, 0x14, 0x0000);
+		phy_write(phydev, 0x14, 0x0400);
+		phy_write(phydev, 0x17, 0x1000);
+		phy_write(phydev, 0x14, 0x4413);
+	}
+	return 0;
+}
+#endif
 /* This function is provided to cope with the possible failures of this phy
  * during aneg process. When aneg fails, the PHY reports that aneg is done
  * but the value found in MII_LPA is wrong:
@@ -241,6 +311,9 @@ static struct phy_driver meson_gxl_phy[] = {
 		/* PHY_BASIC_FEATURES */
 		.flags		= PHY_IS_INTERNAL,
 		.soft_reset     = genphy_soft_reset,
+#ifdef CONFIG_AMLOGIC_ETH_PRIVE
+		.config_init	= custom_internal_config,
+#endif
 		.ack_interrupt	= meson_gxl_ack_interrupt,
 		.config_intr	= meson_gxl_config_intr,
 		.suspend        = genphy_suspend,

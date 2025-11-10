@@ -1118,11 +1118,20 @@ const char * const vmstat_text[] = {
 	"nr_mlock",
 	"nr_page_table_pages",
 	"nr_kernel_stack",
-	"nr_bounce",
-#if IS_ENABLED(CONFIG_ZSMALLOC)
-	"nr_zspages",
+#if IS_ENABLED(CONFIG_SHADOW_CALL_STACK)
+	"nr_shadow_call_stack_bytes",
 #endif
+	"nr_bounce",
+	"nr_zspages",
 	"nr_free_cma",
+#ifdef CONFIG_AMLOGIC_CMA
+	"nr_inactive_anon_cma",
+	"nr_active_anon_cma",
+	"nr_inactive_file_cma",
+	"nr_active_file_cma",
+	"nr_unevictable_cma",
+	"nr_isolated_cma",
+#endif
 
 	/* enum numa_stat_item counters */
 #ifdef CONFIG_NUMA
@@ -1142,6 +1151,9 @@ const char * const vmstat_text[] = {
 	"nr_unevictable",
 	"nr_slab_reclaimable",
 	"nr_slab_unreclaimable",
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+	"nr_slab_unreclaimable_o",
+#endif
 	"nr_isolated_anon",
 	"nr_isolated_file",
 	"workingset_nodes",
@@ -1198,6 +1210,10 @@ const char * const vmstat_text[] = {
 	"pgscan_kswapd",
 	"pgscan_direct",
 	"pgscan_direct_throttle",
+	"pgscan_anon",
+	"pgscan_file",
+	"pgsteal_anon",
+	"pgsteal_file",
 
 #ifdef CONFIG_NUMA
 	"zone_reclaim_failed",
@@ -1985,7 +2001,11 @@ void __init init_mm_internals(void)
 #endif
 #ifdef CONFIG_PROC_FS
 	proc_create_seq("buddyinfo", 0444, NULL, &fragmentation_op);
+#ifdef CONFIG_AMLOGIC_ANDROIDP
+	proc_create_seq("pagetypeinfo", 0444, NULL, &pagetypeinfo_op);
+#else
 	proc_create_seq("pagetypeinfo", 0400, NULL, &pagetypeinfo_op);
+#endif
 	proc_create_seq("vmstat", 0444, NULL, &vmstat_op);
 	proc_create_seq("zoneinfo", 0444, NULL, &zoneinfo_op);
 #endif

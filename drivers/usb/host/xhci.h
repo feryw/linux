@@ -17,11 +17,27 @@
 #include <linux/kernel.h>
 #include <linux/usb/hcd.h>
 #include <linux/io-64-nonatomic-lo-hi.h>
+#include <linux/android_kabi.h>
 
 /* Code sharing between pci-quirks and xhci hcd */
 #include	"xhci-ext-caps.h"
 #include "pci-quirks.h"
 
+#ifdef CONFIG_AMLOGIC_USB
+#define CRG_XHCI_MAX_COUNT		0x8
+struct crg_reset {
+	struct task_struct *crg_reset_task;
+	/* hcd_mutex protect crg_reset_thread and xhci_plat_remove
+	 */
+	struct mutex		*hcd_mutex;
+	int hcd_removed_flag;
+	int id;
+};
+
+//extern struct crg_reset crg_task[CRG_XHCI_MAX_COUNT];
+extern unsigned int db_wait;
+void crg_reset_thread_stop(struct platform_device *pdev);
+#endif
 /* max buffer size for trace and debug messages */
 #define XHCI_MSG_MAX		500
 
@@ -437,6 +453,9 @@ struct xhci_op_regs {
 /* USB3 Protocol PORTLI  Port Link Information */
 #define PORT_RX_LANES(p)	(((p) >> 16) & 0xf)
 #define PORT_TX_LANES(p)	(((p) >> 20) & 0xf)
+#ifdef CONFIG_AMLOGIC_USB
+#define PORT_TEST_MODE_SHIFT	28
+#endif
 
 /* USB2 Protocol PORTHLPMC */
 #define PORT_HIRDM(p)((p) & 3)
@@ -815,6 +834,9 @@ struct xhci_command {
 	struct completion		*completion;
 	union xhci_trb			*command_trb;
 	struct list_head		cmd_list;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
 /* drop context bitmasks */
@@ -1536,6 +1558,8 @@ struct xhci_segment {
 	void			*bounce_buf;
 	unsigned int		bounce_offs;
 	unsigned int		bounce_len;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 struct xhci_td {
@@ -1621,6 +1645,9 @@ struct xhci_ring {
 	enum xhci_ring_type	type;
 	bool			last_td_was_short;
 	struct radix_tree_root	*trb_address_map;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
 struct xhci_erst_entry {
@@ -1638,6 +1665,8 @@ struct xhci_erst {
 	dma_addr_t		erst_dma_addr;
 	/* Num entries the ERST can contain */
 	unsigned int		erst_size;
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 struct xhci_scratchpad {
@@ -1646,7 +1675,15 @@ struct xhci_scratchpad {
 	void **sp_buffers;
 };
 
+#ifdef CONFIG_AMLOGIC_USB
+#define CRG_MAX_ALIGN_BUFFER_LENGTH (5120)
+#endif
+
 struct urb_priv {
+#ifdef CONFIG_AMLOGIC_USB
+	unsigned char transfer_data[CRG_MAX_ALIGN_BUFFER_LENGTH + 16];
+	unsigned char setup_data[64 + 16];
+#endif
 	int	num_tds;
 	int	num_tds_done;
 	struct	xhci_td	td[0];
@@ -1832,6 +1869,9 @@ struct xhci_hcd {
 #define XHCI_STATE_DYING	(1 << 0)
 #define XHCI_STATE_HALTED	(1 << 1)
 #define XHCI_STATE_REMOVING	(1 << 2)
+#ifdef CONFIG_AMLOGIC_USB
+#define XHCI_STATE_STARTING	BIT_ULL(3)
+#endif
 	unsigned long long	quirks;
 #define	XHCI_LINK_TRB_QUIRK	BIT_ULL(0)
 #define XHCI_RESET_EP_QUIRK	BIT_ULL(1)
@@ -1883,6 +1923,13 @@ struct xhci_hcd {
 #define XHCI_SKIP_PHY_INIT	BIT_ULL(37)
 #define XHCI_DISABLE_SPARSE	BIT_ULL(38)
 #define XHCI_NO_SOFT_RETRY	BIT_ULL(40)
+#ifdef CONFIG_AMLOGIC_USB
+#define XHCI_AML_SUPER_SPEED_SUPPORT   BIT_ULL(41)
+#define XHCI_CRG_HOST          BIT_ULL(42)
+#define XHCI_CRG_HOST_011      BIT_ULL(43)
+#define XHCI_CRG_DRD           BIT_ULL(44)
+#define XHCI_CRG_HOST_010      BIT_ULL(45)
+#endif
 
 	unsigned int		num_active_eps;
 	unsigned int		limit_active_eps;
@@ -1911,6 +1958,12 @@ struct xhci_hcd {
 	struct list_head	regset_list;
 
 	void			*dbc;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
+
 	/* platform-specific data -- must come last */
 	unsigned long		priv[0] __aligned(sizeof(s64));
 };
@@ -1920,6 +1973,10 @@ struct xhci_driver_overrides {
 	size_t extra_priv_size;
 	int (*reset)(struct usb_hcd *hcd);
 	int (*start)(struct usb_hcd *hcd);
+	int (*add_endpoint)(struct usb_hcd *hcd, struct usb_device *udev,
+			    struct usb_host_endpoint *ep);
+	int (*drop_endpoint)(struct usb_hcd *hcd, struct usb_device *udev,
+			     struct usb_host_endpoint *ep);
 	int (*check_bandwidth)(struct usb_hcd *, struct usb_device *);
 	void (*reset_bandwidth)(struct usb_hcd *, struct usb_device *);
 };
@@ -2074,6 +2131,10 @@ int xhci_gen_setup(struct usb_hcd *hcd, xhci_get_quirks_t get_quirks);
 void xhci_shutdown(struct usb_hcd *hcd);
 void xhci_init_driver(struct hc_driver *drv,
 		      const struct xhci_driver_overrides *over);
+int xhci_add_endpoint(struct usb_hcd *hcd, struct usb_device *udev,
+		      struct usb_host_endpoint *ep);
+int xhci_drop_endpoint(struct usb_hcd *hcd, struct usb_device *udev,
+		       struct usb_host_endpoint *ep);
 int xhci_check_bandwidth(struct usb_hcd *hcd, struct usb_device *udev);
 void xhci_reset_bandwidth(struct usb_hcd *hcd, struct usb_device *udev);
 int xhci_disable_slot(struct xhci_hcd *xhci, u32 slot_id);
@@ -2199,6 +2260,13 @@ static inline struct xhci_ring *xhci_urb_to_transfer_ring(struct xhci_hcd *xhci,
  */
 static inline bool xhci_urb_suitable_for_idt(struct urb *urb)
 {
+#ifdef CONFIG_AMLOGIC_USB
+	struct usb_hcd	*hcd = bus_to_hcd(urb->dev->bus);
+	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
+
+	if (xhci->quirks & XHCI_CRG_HOST)
+		return false;
+#endif
 	if (!usb_endpoint_xfer_isoc(&urb->ep->desc) && usb_urb_dir_out(urb) &&
 	    usb_endpoint_maxp(&urb->ep->desc) >= TRB_IDT_MAX_SIZE &&
 	    urb->transfer_buffer_length <= TRB_IDT_MAX_SIZE &&
@@ -2703,5 +2771,17 @@ static inline const char *xhci_decode_ep_context(u32 info, u32 info2, u64 deq,
 
 	return str;
 }
+
+#ifdef CONFIG_AMLOGIC_USB
+//int xhci_start(struct xhci_hcd *xhci);
+int xhci_test_single_step(struct xhci_hcd *xhci, gfp_t mem_flags,
+			  struct urb *urb, int slot_id,
+			  unsigned int ep_index, int testflag);
+void queue_trb(struct xhci_hcd *xhci, struct xhci_ring *ring,
+			bool more_trbs_coming,
+			u32 field1, u32 field2, u32 field3, u32 field4);
+int xhci_stop_device(struct xhci_hcd *xhci, int slot_id, int suspend);
+void xhci_ring_device(struct xhci_hcd *xhci, int slot_id);
+#endif
 
 #endif /* __LINUX_XHCI_HCD_H */

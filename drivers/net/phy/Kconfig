@@ -95,7 +95,7 @@ config MDIO_BUS_MUX_MESON_G12A
 	depends on ARCH_MESON || COMPILE_TEST
 	depends on OF_MDIO && HAS_IOMEM && COMMON_CLK
 	select MDIO_BUS_MUX
-	default m if ARCH_MESON
+	default n
 	help
 	  This module provides a driver for the MDIO multiplexer/glue of
 	  the amlogic g12a SoC. The multiplexers connects either the external
@@ -388,6 +388,11 @@ config INTEL_XWAY_PHY
 	  PEF 7061, PEF 7071 and PEF 7072 or integrated into the Intel
 	  SoCs xRX200, xRX300, xRX330, xRX350 and xRX550.
 
+config JLSEMI_PHY
+	tristate "JLSemi PHYs"
+	---help---
+	  Supports JLSemi JL1xxx and JL2xxx
+
 config LSI_ET1011C_PHY
 	tristate "LSI ET1011C PHY"
 	---help---
@@ -434,6 +439,12 @@ config MICROSEMI_PHY
 	---help---
 	  Currently supports VSC8514, VSC8530, VSC8531, VSC8540 and VSC8541 PHYs
 
+config MOTORCOMM_PHY
+	tristate "Motorcomm PHYs"
+	help
+	  Enables support for Motorcomm network PHYs.
+	  Currently supports the YT8511 gigabit PHY.
+
 config NATIONAL_PHY
 	tristate "National Semiconductor PHYs"
 	---help---
@@ -464,6 +475,11 @@ config ROCKCHIP_PHY
 	tristate "Driver for Rockchip Ethernet PHYs"
 	---help---
 	  Currently supports the integrated Ethernet PHY.
+
+config MAXIO_PHY
+        tristate "Maxio PHYs"
+        ---help---
+          Supports the Maxio MAExxxx PHY.
 
 config SMSC_PHY
 	tristate "SMSC PHYs"

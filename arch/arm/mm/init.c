@@ -34,6 +34,9 @@
 #include <asm/tlb.h>
 #include <asm/fixmap.h>
 #include <asm/ptdump.h>
+#ifdef CONFIG_AMLOGIC_PCIE
+#include <linux/amlogic/tee.h>
+#endif
 
 #include <asm/mach/arch.h>
 #include <asm/mach/map.h>
@@ -481,6 +484,9 @@ static void __init free_highpages(void)
  */
 void __init mem_init(void)
 {
+#ifdef CONFIG_AMLOGIC_MEM_DEBUG
+	char *buf = NULL;
+#endif
 #ifdef CONFIG_ARM_LPAE
 	if (swiotlb_force == SWIOTLB_FORCE ||
 	    max_pfn > arm_dma_pfn_limit)
@@ -504,6 +510,16 @@ void __init mem_init(void)
 
 	mem_init_print_info(NULL);
 
+#ifdef CONFIG_AMLOGIC_MEM_DEBUG
+	buf = (void *)__get_free_page(GFP_KERNEL);
+	if (!buf) {
+		pr_err("%s alloc buffer failed\n", __func__);
+	} else {
+		dump_mem_layout(buf);
+		pr_notice("%s\n", buf);
+		free_page((unsigned long)buf);
+	}
+#endif
 	/*
 	 * Check boundaries twice: Some fundamental inconsistencies can
 	 * be detected at build time already.
@@ -709,8 +725,15 @@ void free_initmem(void)
 	fix_kernmem_perms();
 
 	poison_init_mem(__init_begin, __init_end - __init_begin);
+#ifdef CONFIG_AMLOGIC_PCIE
+	if (!machine_is_integrator() && !machine_is_cintegrator() && !keep_init)
+		free_initmem_default(-1);
+	else
+		pr_emerg("init section not freed\n");
+#else
 	if (!machine_is_integrator() && !machine_is_cintegrator())
 		free_initmem_default(-1);
+#endif
 }
 
 #ifdef CONFIG_BLK_DEV_INITRD

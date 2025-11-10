@@ -48,6 +48,9 @@ enum hdmi_infoframe_type {
 	HDMI_INFOFRAME_TYPE_SPD = 0x83,
 	HDMI_INFOFRAME_TYPE_AUDIO = 0x84,
 	HDMI_INFOFRAME_TYPE_DRM = 0x87,
+#ifdef CONFIG_AMLOGIC_MODIFY
+	HDMI_INFOFRAME_TYPE_VENDOR2 = 0x81 | 0x100,
+#endif
 };
 
 #define HDMI_IEEE_OUI 0x000c03
@@ -155,7 +158,7 @@ enum hdmi_content_type {
 };
 
 enum hdmi_metadata_type {
-	HDMI_STATIC_METADATA_TYPE1 = 1,
+	HDMI_STATIC_METADATA_TYPE1 = 0,
 };
 
 enum hdmi_eotf {

@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (c) 2017 BayLibre, SAS
  * Author: Neil Armstrong <narmstrong@baylibre.com>
  *
- * SPDX-License-Identifier: GPL-2.0+
  */
 
+#include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/platform_device.h>
 #include <linux/pm_domain.h>
@@ -14,6 +15,7 @@
 #include <linux/of_device.h>
 #include <linux/reset.h>
 #include <linux/clk.h>
+#include <linux/kallsyms.h>
 
 /* AO Offsets */
 

@@ -24,6 +24,10 @@
 #include <linux/sched.h>
 #include <linux/smp.h>
 #include <linux/delay.h>
+#ifdef CONFIG_AMLOGIC_CPU_INFO
+#include <linux/amlogic/cpu_info.h>
+#include <linux/amlogic/cpu_version.h>
+#endif
 
 /*
  * In case the boot CPU is hotpluggable, we record its initial state and
@@ -128,6 +132,9 @@ static int c_show(struct seq_file *m, void *v)
 {
 	int i, j;
 	bool compat = personality(current->personality) == PER_LINUX32;
+#ifdef CONFIG_AMLOGIC_CPU_INFO
+	unsigned char chipid[CHIPID_LEN];
+#endif
 
 	for_each_online_cpu(i) {
 		struct cpuinfo_arm64 *cpuinfo = &per_cpu(cpu_data, i);
@@ -178,6 +185,40 @@ static int c_show(struct seq_file *m, void *v)
 		seq_printf(m, "CPU part\t: 0x%03x\n", MIDR_PARTNUM(midr));
 		seq_printf(m, "CPU revision\t: %d\n\n", MIDR_REVISION(midr));
 	}
+#ifdef CONFIG_AMLOGIC_CPU_INFO
+	cpuinfo_get_chipid(chipid, CHIPID_LEN);
+	seq_puts(m, "Serial\t\t: ");
+	for (i = 0; i < 16; i++)
+		seq_printf(m, "%02x", chipid[i]);
+	seq_puts(m, "\n");
+#endif
+
+	seq_printf(m, "Hardware\t: %s\n", machine_name);
+
+#ifdef CONFIG_AMLOGIC_CPU_INFO
+	seq_printf(m, "SoC\t\t: ");
+
+	switch (chipid[0]) {
+		case MESON_CPU_MAJOR_ID_SC2:
+			seq_puts(m, "S905X4\n");
+			break;
+		case MESON_CPU_MAJOR_ID_S5:
+			seq_puts(m, "S928X\n");
+			break;
+		case MESON_CPU_MAJOR_ID_T7:
+			seq_puts(m, "A311D2\n");
+			break;
+		case MESON_CPU_MAJOR_ID_S4:
+			if (strstr(ce_name, "s905y4") != NULL)
+				seq_puts(m, "S905Y4\n");
+			else if (strstr(ce_name, "s905w2") != NULL)
+				seq_puts(m, "S905W2\n");
+			break;
+		default:
+			seq_puts(m, "Unknown\n");
+	}
+	seq_puts(m, "\n");
+#endif
 
 	return 0;
 }
@@ -321,7 +362,7 @@ static void cpuinfo_detect_icache_policy(struct cpuinfo_arm64 *info)
 		set_bit(ICACHEF_ALIASING, &__icache_flags);
 	}
 
-	pr_info("Detected %s I-cache on CPU%d\n", icache_policy_str[l1ip], cpu);
+	pr_debug("Detected %s I-cache on CPU%d\n", icache_policy_str[l1ip], cpu);
 }
 
 static void __cpuinfo_store_cpu(struct cpuinfo_arm64 *info)

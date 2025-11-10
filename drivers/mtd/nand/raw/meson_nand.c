@@ -1357,10 +1357,10 @@ static const struct meson_nfc_data meson_axg_data = {
 
 static const struct of_device_id meson_nfc_id_table[] = {
 	{
-		.compatible = "amlogic,meson-gxl-nfc",
+		.compatible = "amlogic,meson-nfc-full-ecc",
 		.data = &meson_gxl_data,
 	}, {
-		.compatible = "amlogic,meson-axg-nfc",
+		.compatible = "amlogic,meson-nfc-single-ecc",
 		.data = &meson_axg_data,
 	},
 	{}

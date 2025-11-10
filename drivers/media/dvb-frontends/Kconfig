@@ -56,6 +56,20 @@ config DVB_STV6111
 
 	  Say Y when you want to support these frontends.
 
+config DVB_TAS2101
+	tristate "Tmax TAS2101 based"
+	depends on DVB_CORE && I2C
+	default m if !MEDIA_SUBDRV_AUTOSELECT
+	help
+	Say Y when you want to support this frontend.
+
+config DVB_GX1133
+	tristate "NationalChip GX1133 based"
+	depends on DVB_CORE && I2C
+	default m if !MEDIA_SUBDRV_AUTOSELECT
+	help
+	Say Y when you want to support this frontend.
+
 config DVB_MXL5XX
 	tristate "MaxLinear MxL5xx based tuner-demodulators"
 	depends on DVB_CORE && I2C
@@ -284,6 +298,13 @@ config DVB_SI21XX
 	default m if !MEDIA_SUBDRV_AUTOSELECT
 	help
 	  A DVB-S tuner module. Say Y when you want to support this frontend.
+
+config DVB_SI2183
+	tristate "Silicon Labs Si2183 demodulator"
+	depends on DVB_CORE && I2C
+	default m if !MEDIA_SUBDRV_AUTOSELECT
+	help
+	  Say Y when you want to support this frontend.
 
 config DVB_TS2020
 	tristate "Montage Tehnology TS2020 based tuners"
@@ -532,6 +553,13 @@ config DVB_SI2168
 	help
 	  Say Y when you want to support this frontend.
 
+config DVB_CXD2878
+	tristate "sony cxd2878 family Dvb-T/T2/C(j83-a/b/c),ISDB-T/C,ATSC Demodulator" 
+	depends on DVB_CORE && I2C 
+	default m if !MEDIA_SUBDRV_AUTOSELECT
+	help
+	  Say Y when you want to support this frontend.
+
 config DVB_AS102_FE
 	tristate
 	depends on DVB_CORE
@@ -543,6 +571,14 @@ config DVB_ZD1301_DEMOD
 	default m if !MEDIA_SUBDRV_AUTOSELECT
 	help
 	  Say Y when you want to support this frontend.
+
+config DVB_M88RS6060
+        tristate "Montage Technology M88RS6060 Demodulation and tuner"
+        depends on DVB_CORE && I2C 
+        select REGMAP_I2C
+        default m if !MEDIA_SUBDRV_AUTOSELECT
+        help
+          Say Y when you want to support this frontend.
 
 config DVB_GP8PSK_FE
 	tristate

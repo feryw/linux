@@ -19,6 +19,14 @@
 #include <mach/memory.h>
 #endif
 
+#ifdef CONFIG_AMLOGIC_VMAP
+#define SIZE_VSTACK		(48 * 1024 * 1024)
+#else
+#define SIZE_VSTACK		(0)
+#endif
+
+#include <asm/kasan_def.h>
+
 /* PAGE_OFFSET - the virtual address of the start of the kernel image */
 #define PAGE_OFFSET		UL(CONFIG_PAGE_OFFSET)
 
@@ -28,7 +36,12 @@
  * TASK_SIZE - the maximum size of a user space task.
  * TASK_UNMAPPED_BASE - the lower boundary of the mmap VM area
  */
-#define TASK_SIZE		(UL(CONFIG_PAGE_OFFSET) - UL(SZ_16M))
+
+#ifndef CONFIG_KASAN
+#define TASK_SIZE		(UL(CONFIG_PAGE_OFFSET) - UL(SZ_16M) - SIZE_VSTACK)
+#else
+#define TASK_SIZE		(KASAN_SHADOW_START)
+#endif /* CONFIG_KASAN */
 #define TASK_UNMAPPED_BASE	ALIGN(TASK_SIZE / 3, SZ_16M)
 
 /*
@@ -40,12 +53,16 @@
  * The module space lives between the addresses given by TASK_SIZE
  * and PAGE_OFFSET - it must be within 32MB of the kernel text.
  */
+#if defined(CONFIG_AMLOGIC_VMAP)
+#define MODULES_VADDR		(PAGE_OFFSET - SZ_64M)
+#else
 #ifndef CONFIG_THUMB2_KERNEL
 #define MODULES_VADDR		(PAGE_OFFSET - SZ_16M)
 #else
 /* smaller range for Thumb-2 symbols relocation (2^24)*/
 #define MODULES_VADDR		(PAGE_OFFSET - SZ_8M)
 #endif
+#endif	/* CONFIG_AMLOGIC_VMAP */
 
 #if TASK_SIZE > MODULES_VADDR
 #error Top of user space clashes with start of module space

@@ -21,8 +21,7 @@
 #include <linux/io-pgtable.h>
 #include <linux/iommu.h>
 #include <linux/iopoll.h>
-#include <linux/init.h>
-#include <linux/moduleparam.h>
+#include <linux/module.h>
 #include <linux/msi.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
@@ -33,6 +32,10 @@
 #include <linux/platform_device.h>
 
 #include <linux/amba/bus.h>
+#ifdef CONFIG_AMLOGIC_MODIFY
+#include <dt-bindings/memory/meson-p1-sid-map.h>
+#include <linux/arm-smccc.h>
+#endif
 
 /* MMIO registers */
 #define ARM_SMMU_IDR0			0x0
@@ -384,11 +387,11 @@
 #define MSI_IOVA_BASE			0x8000000
 #define MSI_IOVA_LENGTH			0x100000
 
-/*
- * not really modular, but the easiest way to keep compat with existing
- * bootargs behaviour is to continue using module_param_named here.
- */
+#ifdef CONFIG_AMLOGIC_MODIFY
+static bool disable_bypass;
+#else
 static bool disable_bypass = 1;
+#endif
 module_param_named(disable_bypass, disable_bypass, bool, S_IRUGO);
 MODULE_PARM_DESC(disable_bypass,
 	"Disable bypass streams such that incoming transactions from devices that are not attached to an iommu domain will report an abort back to the device and will not be allowed to pass through the SMMU.");
@@ -672,6 +675,17 @@ struct arm_smmu_option_prop {
 	u32 opt;
 	const char *prop;
 };
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+struct aml_irq_cmd {
+	unsigned int smc_irq_cmd;
+};
+
+struct aml_irq_cmd irq_cmd;
+
+#define AML_IRQ_CLEAR	0
+#define AML_IRQ_ENABLE	1
+#endif
 
 static struct arm_smmu_option_prop arm_smmu_options[] = {
 	{ ARM_SMMU_OPT_SKIP_PREFETCH, "hisilicon,broken-prefetch-cmd" },
@@ -1846,6 +1860,13 @@ static irqreturn_t arm_smmu_combined_irq_thread(int irq, void *dev)
 
 static irqreturn_t arm_smmu_combined_irq_handler(int irq, void *dev)
 {
+#ifdef CONFIG_AMLOGIC_MODIFY
+	struct arm_smccc_res res;
+
+	arm_smccc_smc(irq_cmd.smc_irq_cmd, AML_IRQ_CLEAR,
+		      1, 0, 0, 0, 0, 0, &res);
+#endif
+
 	arm_smmu_gerror_handler(irq, dev);
 	return IRQ_WAKE_THREAD;
 }
@@ -2451,7 +2472,7 @@ out_unlock:
 }
 
 static int arm_smmu_map(struct iommu_domain *domain, unsigned long iova,
-			phys_addr_t paddr, size_t size, int prot)
+			phys_addr_t paddr, size_t size, int prot, gfp_t gfp)
 {
 	struct io_pgtable_ops *ops = to_smmu_domain(domain)->pgtbl_ops;
 
@@ -2486,7 +2507,7 @@ static void arm_smmu_iotlb_sync(struct iommu_domain *domain,
 {
 	struct arm_smmu_domain *smmu_domain = to_smmu_domain(domain);
 
-	arm_smmu_tlb_inv_range(gather->start, gather->end - gather->start,
+	arm_smmu_tlb_inv_range(gather->start, gather->end - gather->start + 1,
 			       gather->pgsize, true, smmu_domain);
 }
 
@@ -3429,6 +3450,10 @@ static int arm_smmu_device_hw_probe(struct arm_smmu_device *smmu)
 	/* SID/SSID sizes */
 	smmu->ssid_bits = FIELD_GET(IDR1_SSIDSIZE, reg);
 	smmu->sid_bits = FIELD_GET(IDR1_SIDSIZE, reg);
+#ifdef CONFIG_AMLOGIC_MODIFY
+	/* for select the line stream table */
+	smmu->sid_bits = 7;
+#endif
 
 	/*
 	 * If the SMMU supports fewer bits than would fill a single L2 stream
@@ -3573,6 +3598,149 @@ static unsigned long arm_smmu_resource_size(struct arm_smmu_device *smmu)
 		return SZ_128K;
 }
 
+static int arm_smmu_set_bus_ops(struct iommu_ops *ops)
+{
+	int err;
+
+#ifdef CONFIG_PCI
+	if (pci_bus_type.iommu_ops != ops) {
+		err = bus_set_iommu(&pci_bus_type, ops);
+		if (err)
+			return err;
+	}
+#endif
+#ifdef CONFIG_ARM_AMBA
+	if (amba_bustype.iommu_ops != ops) {
+		err = bus_set_iommu(&amba_bustype, ops);
+		if (err)
+			goto err_reset_pci_ops;
+	}
+#endif
+	if (platform_bus_type.iommu_ops != ops) {
+		err = bus_set_iommu(&platform_bus_type, ops);
+		if (err)
+			goto err_reset_amba_ops;
+	}
+
+	return 0;
+
+err_reset_amba_ops:
+#ifdef CONFIG_ARM_AMBA
+	bus_set_iommu(&amba_bustype, NULL);
+#endif
+err_reset_pci_ops: __maybe_unused;
+#ifdef CONFIG_PCI
+	bus_set_iommu(&pci_bus_type, NULL);
+#endif
+	return err;
+}
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+static int init_streamid_reg(u32 *paddr)
+{
+	int i = 0;
+	u32 ctrl_tmp;
+
+	unsigned int p1_sid_array[] = {
+		/* MMU_CTRL_SID_REG0 */
+		P1_SID_MOP_A,
+		P1_SID_MOP_B,
+		/* MMU_CTRL_SID_REG1 */
+		P1_SID_DEP_A,
+		P1_SID_DEP_B,
+		/* MMU_CTRL_SID_REG2 */
+		P1_SID_VFE,
+		P1_SID_GE2D,
+		/* MMU_CTRL_SID_REG3 */
+		P1_SID_DEWARP_A,
+		P1_SID_DEWARP_B,
+		/* MMU_CTRL_SID_REG4 */
+		P1_SID_DEWARP_C,
+		P1_SID_RESERVED,
+		/* MMU_CTRL_SID_REG5 */
+		P1_SID_NNA_A,
+		P1_SID_NNA_B,
+		/* MMU_CTRL_SID_REG6 */
+		P1_SID_NNA_C,
+		P1_SID_NNA_D,
+		/* MMU_CTRL_SID_REG7 */
+		P1_SID_NNA_E,
+		P1_SID_NNA_F,
+		/* MMU_CTRL_SID_REG8 */
+		P1_SID_USB3_A,
+		P1_SID_USB3_B,
+		/* MMU_CTRL_SID_REG9 */
+		P1_SID_USB3_C,
+		P1_SID_PCIE,
+		/* MMU_CTRL_SID_REG10 */
+		P1_SID_M4,
+		P1_SID_DSP_A,
+		/* MMU_CTRL_SID_REG11 */
+		P1_SID_DSP_B,
+		P1_SID_AOCPU,
+		/* MMU_CTRL_SID_REG12 */
+		P1_SID_JTAG,
+		P1_SID_DEV0_P0_SPICC0,
+		/* MMU_CTRL_SID_REG13 */
+		P1_SID_DEV0_P1_SPICC1,
+		P1_SID_DEV0_P2_RESERVED,
+		/* MMU_CTRL_SID_REG14 */
+		P1_SID_DEV0_P3_SDEMMCA,
+		P1_SID_DEV0_P4_RESERVED,
+		/* MMU_CTRL_SID_REG15 */
+		P1_SID_DEV0_P5_SPICC2,
+		P1_SID_DEV0_P6_RESERVED,
+		/* MMU_CTRL_SID_REG16 */
+		P1_SID_DEV0_P7_RESERVED,
+		P1_SID_DEV1_P0_RESERVED,
+		/* MMU_CTRL_SID_REG17 */
+		P1_SID_DEV1_P1_RESERVED,
+		P1_SID_DEV1_P2_ETH,
+		/* MMU_CTRL_SID_REG18 */
+		P1_SID_DEV1_P3_AIFIFO,
+		P1_SID_DEV1_P4_AUDMA,
+		/* MMU_CTRL_SID_REG19 */
+		P1_SID_DEV1_P5_SPICC3,
+		P1_SID_DEV1_P6_SPICC4,
+		/* MMU_CTRL_SID_REG20 */
+		P1_SID_DEV1_P7_SPICC5,
+		P1_SID_DEV2_P0_AUDIO,
+		/* MMU_CTRL_SID_REG21 */
+		P1_SID_DEV2_P1_RESERVED,
+		P1_SID_DEV2_P2_RESERVED,
+		/* MMU_CTRL_SID_REG22 */
+		P1_SID_DEV2_P3_RESERVED,
+		P1_SID_DEV2_P4_RESERVED,
+		/* MMU_CTRL_SID_REG23 */
+		P1_SID_DEV2_P5_RESERVED,
+		P1_SID_DEV2_P6_RESERVED,
+		/* MMU_CTRL_SID_REG24 */
+		P1_SID_DEV2_P7_RESERVED,
+		P1_SID_EMMC,
+		/* MMU_CTRL_SID_REG25 */
+		P1_SID_DMA,
+		P1_SID_RESERVED,
+		/* MMU_CTRL_SID_REG26 */
+		P1_SID_ISP_A,
+		P1_SID_ISP_B,
+		/* MMU_CTRL_SID_REG27 */
+		P1_SID_ISP_C,
+		P1_SID_ISP_D,
+		/* MMU_CTRL_SID_REG28 */
+		P1_SID_ISP_E,
+		P1_SID_RESERVED
+	};
+
+	for (i = 0; i < 29; i++) {
+		ctrl_tmp = p1_sid_array[2 * i] +
+			   (p1_sid_array[2 * i + 1] << 16);
+		writel_relaxed(ctrl_tmp, paddr + i);
+	}
+
+	return 0;
+}
+#endif
+
 static int arm_smmu_device_probe(struct platform_device *pdev)
 {
 	int irq, ret;
@@ -3581,6 +3749,13 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	struct arm_smmu_device *smmu;
 	struct device *dev = &pdev->dev;
 	bool bypass;
+#ifdef CONFIG_AMLOGIC_MODIFY
+	int i = 0;
+	void __iomem *smmu_ctrl_base, *smmu_ctrl_sid_base;
+	u32 ctrl_tmp;
+	struct arm_smccc_res smc_res;
+	struct device_node *np = pdev->dev.of_node;
+#endif
 
 	smmu = devm_kzalloc(dev, sizeof(*smmu), GFP_KERNEL);
 	if (!smmu) {
@@ -3611,6 +3786,41 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 	smmu->base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(smmu->base))
 		return PTR_ERR(smmu->base);
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+	/* map the mmu ctrl register */
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	smmu_ctrl_base = devm_ioremap_resource(dev, res);
+	if (IS_ERR(smmu_ctrl_base))
+		return PTR_ERR(smmu->base);
+
+	/* set the TBU mode 2 */
+	for (i = 9; i < 32; i = i + 2) {
+		ctrl_tmp = readl_relaxed(smmu_ctrl_base + i * 4);
+		ctrl_tmp &= ~(3 << 20);
+		ctrl_tmp |= (2 << 20);
+		writel_relaxed(ctrl_tmp, smmu_ctrl_base + i * 4);
+	}
+
+	devm_iounmap(dev, smmu_ctrl_base);
+
+	/* init the stream ID in MMU_CTRL_SID_REGx */
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 2);
+	smmu_ctrl_sid_base = devm_ioremap_resource(dev, res);
+	if (IS_ERR(smmu_ctrl_sid_base))
+		return PTR_ERR(smmu->base);
+
+	init_streamid_reg(smmu_ctrl_sid_base);
+
+	of_node_get(np);
+	ret = of_property_read_u32(np, "smc_irq_cmd", &irq_cmd.smc_irq_cmd);
+	if (ret) {
+		dev_err(&pdev->dev, "please config smc_irq_cmd\n");
+		return ret;
+	}
+	arm_smccc_smc(irq_cmd.smc_irq_cmd, AML_IRQ_ENABLE,
+		      1, 0, 0, 0, 0, 0, &smc_res);
+#endif
 
 	/* Interrupt lines */
 
@@ -3663,48 +3873,44 @@ static int arm_smmu_device_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-#ifdef CONFIG_PCI
-	if (pci_bus_type.iommu_ops != &arm_smmu_ops) {
-		pci_request_acs();
-		ret = bus_set_iommu(&pci_bus_type, &arm_smmu_ops);
-		if (ret)
-			return ret;
-	}
-#endif
-#ifdef CONFIG_ARM_AMBA
-	if (amba_bustype.iommu_ops != &arm_smmu_ops) {
-		ret = bus_set_iommu(&amba_bustype, &arm_smmu_ops);
-		if (ret)
-			return ret;
-	}
-#endif
-	if (platform_bus_type.iommu_ops != &arm_smmu_ops) {
-		ret = bus_set_iommu(&platform_bus_type, &arm_smmu_ops);
-		if (ret)
-			return ret;
-	}
+	return arm_smmu_set_bus_ops(&arm_smmu_ops);
+}
+
+static int arm_smmu_device_remove(struct platform_device *pdev)
+{
+	struct arm_smmu_device *smmu = platform_get_drvdata(pdev);
+
+	arm_smmu_set_bus_ops(NULL);
+	iommu_device_unregister(&smmu->iommu);
+	iommu_device_sysfs_remove(&smmu->iommu);
+	arm_smmu_device_disable(smmu);
+
 	return 0;
 }
 
 static void arm_smmu_device_shutdown(struct platform_device *pdev)
 {
-	struct arm_smmu_device *smmu = platform_get_drvdata(pdev);
-
-	arm_smmu_device_disable(smmu);
+	arm_smmu_device_remove(pdev);
 }
 
 static const struct of_device_id arm_smmu_of_match[] = {
 	{ .compatible = "arm,smmu-v3", },
 	{ },
 };
+MODULE_DEVICE_TABLE(of, arm_smmu_of_match);
 
 static struct platform_driver arm_smmu_driver = {
 	.driver	= {
-		.name		= "arm-smmu-v3",
-		.of_match_table	= of_match_ptr(arm_smmu_of_match),
-		.suppress_bind_attrs = true,
+		.name			= "arm-smmu-v3",
+		.of_match_table		= of_match_ptr(arm_smmu_of_match),
+		.suppress_bind_attrs	= true,
 	},
 	.probe	= arm_smmu_device_probe,
+	.remove	= arm_smmu_device_remove,
 	.shutdown = arm_smmu_device_shutdown,
 };
-builtin_platform_driver(arm_smmu_driver);
+module_platform_driver(arm_smmu_driver);
+
+MODULE_DESCRIPTION("IOMMU API for ARM architected SMMUv3 implementations");
+MODULE_AUTHOR("Will Deacon <will@kernel.org>");
+MODULE_LICENSE("GPL v2");

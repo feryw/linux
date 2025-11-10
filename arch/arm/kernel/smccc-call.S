@@ -39,7 +39,7 @@ UNWIND(	.save	{r4-r7})
 1:	pop	{r4-r7}
 	ldr	r12, [sp, #(4 * 4)]
 	stm	r12, {r0-r3}
-	bx	lr
+	bx      lr
 UNWIND(	.fnend)
 	.endm
 

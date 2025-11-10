@@ -156,11 +156,19 @@ TRACE_EVENT(sched_switch,
 	TP_fast_assign(
 		memcpy(__entry->next_comm, next->comm, TASK_COMM_LEN);
 		__entry->prev_pid	= prev->pid;
+#ifdef CONFIG_AMLOGIC_MODIFY
+		__entry->prev_prio      = prev->prio < 0 ? 0 : prev->prio;
+#else
 		__entry->prev_prio	= prev->prio;
+#endif
 		__entry->prev_state	= __trace_sched_switch_state(preempt, prev);
 		memcpy(__entry->prev_comm, prev->comm, TASK_COMM_LEN);
 		__entry->next_pid	= next->pid;
+#ifdef CONFIG_AMLOGIC_MODIFY
+		__entry->next_prio      = next->prio < 0 ? 0 : next->prio;
+#else
 		__entry->next_prio	= next->prio;
+#endif
 		/* XXX SCHED_DEADLINE */
 	),
 
@@ -401,6 +409,30 @@ DEFINE_EVENT_SCHEDSTAT(sched_stat_template, sched_stat_iowait,
 DEFINE_EVENT_SCHEDSTAT(sched_stat_template, sched_stat_blocked,
 	     TP_PROTO(struct task_struct *tsk, u64 delay),
 	     TP_ARGS(tsk, delay));
+
+/*
+ * Tracepoint for recording the cause of uninterruptible sleep.
+ */
+TRACE_EVENT(sched_blocked_reason,
+
+	TP_PROTO(struct task_struct *tsk),
+
+	TP_ARGS(tsk),
+
+	TP_STRUCT__entry(
+		__field( pid_t,	pid	)
+		__field( void*, caller	)
+		__field( bool, io_wait	)
+	),
+
+	TP_fast_assign(
+		__entry->pid	= tsk->pid;
+		__entry->caller = (void *)get_wchan(tsk);
+		__entry->io_wait = tsk->in_iowait;
+	),
+
+	TP_printk("pid=%d iowait=%d caller=%pS", __entry->pid, __entry->io_wait, __entry->caller)
+);
 
 /*
  * Tracepoint for accounting runtime (time the task is executing

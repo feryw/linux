@@ -22,13 +22,27 @@
 
 static DEFINE_PER_CPU(bool, hard_watchdog_warn);
 static DEFINE_PER_CPU(bool, watchdog_nmi_touch);
+#ifdef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
+static cpumask_t __read_mostly watchdog_cpus;
+#endif
+#ifndef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
 static DEFINE_PER_CPU(struct perf_event *, watchdog_ev);
 static DEFINE_PER_CPU(struct perf_event *, dead_event);
 static struct cpumask dead_events_mask;
+#else
+DECLARE_PER_CPU(unsigned long, hrtimer_interrupts);
+DECLARE_PER_CPU(unsigned long, hrtimer_interrupts_saved);
+#ifdef CONFIG_AMLOGIC_MODIFY
+static DEFINE_PER_CPU(unsigned long, hrtimer_interrupts_lock_cnt);
+#endif
+#endif
 
-static unsigned long hardlockup_allcpu_dumped;
+static unsigned long __maybe_unused hardlockup_allcpu_dumped;
+#ifndef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
 static atomic_t watchdog_cpus = ATOMIC_INIT(0);
+#endif
 
+#ifndef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
 notrace void arch_touch_nmi_watchdog(void)
 {
 	/*
@@ -41,6 +55,7 @@ notrace void arch_touch_nmi_watchdog(void)
 	raw_cpu_write(watchdog_nmi_touch, true);
 }
 EXPORT_SYMBOL(arch_touch_nmi_watchdog);
+#endif
 
 #ifdef CONFIG_HARDLOCKUP_CHECK_TIMESTAMP
 static DEFINE_PER_CPU(ktime_t, last_timestamp);
@@ -98,6 +113,7 @@ static inline bool watchdog_check_timestamp(void)
 }
 #endif
 
+#ifndef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
 static struct perf_event_attr wd_hw_attr = {
 	.type		= PERF_TYPE_HARDWARE,
 	.config		= PERF_COUNT_HW_CPU_CYCLES,
@@ -152,6 +168,10 @@ static void watchdog_overflow_callback(struct perf_event *event,
 				!test_and_set_bit(0, &hardlockup_allcpu_dumped))
 			trigger_allbutself_cpu_backtrace();
 
+#ifdef CONFIG_AMLOGIC_DEBUG_LOCKUP
+		pr_lockup_info(this_cpu);
+#endif
+
 		if (hardlockup_panic)
 			nmi_panic(regs, "Hard LOCKUP");
 
@@ -162,7 +182,100 @@ static void watchdog_overflow_callback(struct perf_event *event,
 	__this_cpu_write(hard_watchdog_warn, false);
 	return;
 }
+#endif
 
+#ifdef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
+static unsigned int watchdog_next_cpu(unsigned int cpu)
+{
+	cpumask_t cpus = watchdog_cpus;
+	unsigned int next_cpu;
+
+	next_cpu = cpumask_next(cpu, &cpus);
+	if (next_cpu >= nr_cpu_ids)
+		next_cpu = cpumask_first(&cpus);
+
+	if (next_cpu == cpu)
+		return nr_cpu_ids;
+
+	return next_cpu;
+}
+
+static int is_hardlockup_other_cpu(unsigned int cpu)
+{
+	unsigned long hrint = per_cpu(hrtimer_interrupts, cpu);
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+	unsigned long lock_cnt = per_cpu(hrtimer_interrupts_lock_cnt, cpu);
+
+	if (hrint ==  per_cpu(hrtimer_interrupts_saved, cpu)) {
+		per_cpu(hrtimer_interrupts_lock_cnt, cpu) = ++lock_cnt;
+		if (lock_cnt > watchdog_thresh)
+			return 1;
+	} else {
+		per_cpu(hrtimer_interrupts_lock_cnt, cpu) = 0;
+	}
+#else
+	if (per_cpu(hrtimer_interrupts_saved, cpu) == hrint)
+		return 1;
+#endif
+
+	per_cpu(hrtimer_interrupts_saved, cpu) = hrint;
+	return 0;
+}
+
+void watchdog_check_hardlockup_other_cpu(void)
+{
+	unsigned int next_cpu;
+
+#ifndef CONFIG_AMLOGIC_MODIFY
+	/*
+	 * Test for hardlockups every 3 samples.  The sample period is
+	 *  watchdog_thresh * 2 / 5, so 3 samples gets us back to slightly over
+	 *  watchdog_thresh (over by 20%).
+	 */
+	if (__this_cpu_read(hrtimer_interrupts) % 3 != 0)
+		return;
+
+#endif
+	/* check for a hardlockup on the next cpu */
+	next_cpu = watchdog_next_cpu(smp_processor_id());
+	if (next_cpu >= nr_cpu_ids)
+		return;
+
+	/*mem barrier*/
+	smp_rmb();
+
+	if (per_cpu(watchdog_nmi_touch, next_cpu) == true) {
+		per_cpu(watchdog_nmi_touch, next_cpu) = false;
+		return;
+	}
+
+	if (is_hardlockup_other_cpu(next_cpu)) {
+		/* only warn once */
+		if (per_cpu(hard_watchdog_warn, next_cpu) == true)
+			return;
+
+#ifdef CONFIG_AMLOGIC_DEBUG_LOCKUP
+	pr_lockup_info(next_cpu);
+#endif
+
+		if (hardlockup_panic)
+			panic("Watchdog detected hard LOCKUP on cpu %u",
+			      next_cpu);
+		else
+			WARN(1, "Watchdog detected hard LOCKUP on cpu %u",
+			     next_cpu);
+
+		per_cpu(hard_watchdog_warn, next_cpu) = true;
+	} else {
+		per_cpu(hard_watchdog_warn, next_cpu) = false;
+	}
+}
+#else
+static inline void watchdog_check_hardlockup_other_cpu(void) { return; }
+#endif
+
+#ifdef CONFIG_HAVE_NMI_WATCHDOG
 static int hardlockup_detector_event_create(void)
 {
 	unsigned int cpu = smp_processor_id();
@@ -294,3 +407,44 @@ int __init hardlockup_detector_perf_init(void)
 	}
 	return ret;
 }
+#else
+#ifdef CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU
+int watchdog_nmi_enable(unsigned int cpu)
+{
+	/*
+	 * The new cpu will be marked online before the first hrtimer interrupt
+	 * runs on it.  If another cpu tests for a hardlockup on the new cpu
+	 * before it has run its first hrtimer, it will get a false positive.
+	 * Touch the watchdog on the new cpu to delay the first check for at
+	 * least 3 sampling periods to guarantee one hrtimer has run on the new
+	 * cpu.
+	 */
+	per_cpu(watchdog_nmi_touch, cpu) = true;
+	/*mem barrier*/
+	smp_wmb();
+	cpumask_set_cpu(cpu, &watchdog_cpus);
+	return 0;
+}
+
+void watchdog_nmi_disable(unsigned int cpu)
+{
+	unsigned int next_cpu = watchdog_next_cpu(cpu);
+
+	/*
+	 * Offlining this cpu will cause the cpu before this one to start
+	 * checking the one after this one.  If this cpu just finished checking
+	 * the next cpu and updating hrtimer_interrupts_saved, and then the
+	 * previous cpu checks it within one sample period, it will trigger a
+	 * false positive.  Touch the watchdog on the next cpu to prevent it.
+	 */
+	if (next_cpu < nr_cpu_ids)
+		per_cpu(watchdog_nmi_touch, next_cpu) = true;
+	/*mem barrier*/
+	smp_wmb();
+	cpumask_clear_cpu(cpu, &watchdog_cpus);
+}
+#else
+int watchdog_nmi_enable(unsigned int cpu) { return 0; }
+void watchdog_nmi_disable(unsigned int cpu) { return; }
+#endif /* CONFIG_HARDLOCKUP_DETECTOR_OTHER_CPU */
+#endif /* CONFIG_HAVE_NMI_WATCHDOG*/

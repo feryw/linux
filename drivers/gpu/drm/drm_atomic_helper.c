@@ -1459,10 +1459,17 @@ drm_atomic_helper_wait_for_vblanks(struct drm_device *dev,
 		if (!(crtc_mask & drm_crtc_mask(crtc)))
 			continue;
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+		ret = wait_event_timeout(dev->vblank[i].queue,
+				old_state->crtcs[i].last_vblank_count !=
+					drm_crtc_vblank_count(crtc),
+				msecs_to_jiffies(1000));
+#else
 		ret = wait_event_timeout(dev->vblank[i].queue,
 				old_state->crtcs[i].last_vblank_count !=
 					drm_crtc_vblank_count(crtc),
 				msecs_to_jiffies(100));
+#endif
 
 		WARN(!ret, "[CRTC:%d:%s] vblank wait timed out\n",
 		     crtc->base.id, crtc->name);
@@ -1660,13 +1667,45 @@ int drm_atomic_helper_async_check(struct drm_device *dev,
 	struct drm_plane_state *old_plane_state = NULL;
 	struct drm_plane_state *new_plane_state = NULL;
 	const struct drm_plane_helper_funcs *funcs;
+#ifdef CONFIG_AMLOGIC_MODIFY
+	int i;
+#else
 	int i, n_planes = 0;
+#endif
 
 	for_each_new_crtc_in_state(state, crtc, crtc_state, i) {
 		if (drm_atomic_crtc_needs_modeset(crtc_state))
 			return -EINVAL;
 	}
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+	for_each_oldnew_plane_in_state(state, plane, old_plane_state, new_plane_state, i) {
+		if (!new_plane_state->crtc ||
+		    old_plane_state->crtc != new_plane_state->crtc)
+			return -EINVAL;
+
+		funcs = plane->helper_private;
+		if (!funcs->atomic_async_update)
+			return -EINVAL;
+
+		if (new_plane_state->fence)
+			return -EINVAL;
+
+		/*
+		 * Don't do an async update if there is an outstanding commit modifying
+		 * the plane.  This prevents our async update's changes from getting
+		 * overridden by a previous synchronous update's state.
+		 */
+		if (old_plane_state->commit &&
+		    !try_wait_for_completion(&old_plane_state->commit->hw_done))
+			return -EBUSY;
+
+		if (funcs->atomic_async_check(plane, new_plane_state))
+			return -EINVAL;
+	}
+
+	return 0;
+#else
 	for_each_oldnew_plane_in_state(state, plane, old_plane_state, new_plane_state, i)
 		n_planes++;
 
@@ -1695,6 +1734,7 @@ int drm_atomic_helper_async_check(struct drm_device *dev,
 		return -EBUSY;
 
 	return funcs->atomic_async_check(plane, new_plane_state);
+#endif
 }
 EXPORT_SYMBOL(drm_atomic_helper_async_check);
 

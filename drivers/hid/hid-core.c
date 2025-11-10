@@ -50,6 +50,19 @@ static int hid_ignore_special_drivers = 0;
 module_param_named(ignore_special_drivers, hid_ignore_special_drivers, int, 0600);
 MODULE_PARM_DESC(ignore_special_drivers, "Ignore any special drivers and handle all devices by generic driver");
 
+struct customer_device {
+	int vid;
+	int pid;
+	char *match;
+};
+
+static struct customer_device cus_hid[] = {
+	{0x046d, 0xb30b, NULL},
+	{0x000d, 0x0000, NULL},
+	{0x057e, 0x2009, "PXN"},
+	{0x0000, 0x0000}
+};
+
 /*
  * Register a new report for a device.
  */
@@ -2382,6 +2395,7 @@ int hid_add_device(struct hid_device *hdev)
 {
 	static atomic_t id = ATOMIC_INIT(0);
 	int ret;
+	struct customer_device *temp_hid = cus_hid;
 
 	if (WARN_ON(hdev->status & HID_STAT_ADDED))
 		return -EBUSY;
@@ -2411,6 +2425,16 @@ int hid_add_device(struct hid_device *hdev)
 	if (!hdev->dev_rdesc)
 		return -ENODEV;
 
+	while (temp_hid->vid != 0 || temp_hid->pid != 0) {
+		if (hdev->vendor == temp_hid->vid &&
+			hdev->product == temp_hid->pid) {
+			if (!temp_hid->match || strstr(hdev->name, temp_hid->match)) {
+				hid_ignore_special_drivers = 1;
+				break;
+			}
+		}
+		temp_hid++;
+	}
 	/*
 	 * Scan generic devices for group information
 	 */

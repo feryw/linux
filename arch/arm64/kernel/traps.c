@@ -50,12 +50,42 @@ static const char *handler[]= {
 	"Error"
 };
 
+#ifndef CONFIG_AMLOGIC_USER_FAULT
 int show_unhandled_signals = 0;
+#else
+int show_unhandled_signals = 1;
+#endif
 
+#ifdef CONFIG_AMLOGIC_VMAP
+static void dump_backtrace_entry(unsigned long ip, unsigned long fp,
+				 unsigned long low)
+{
+	unsigned long fp_size = 0;
+	unsigned long high;
+
+	high = low + THREAD_SIZE;
+
+	/*
+	 * Since the target process may be rescheduled again,
+	 * we have to add necessary validation checking for fp.
+	 * The checking condition is borrowed from unwind_frame
+	 */
+	if (on_irq_stack(fp, NULL) ||
+	    (fp >= low && fp <= high)) {
+		fp_size = *((unsigned long *)fp) - fp;
+		/* fp cross IRQ or vmap stack */
+		if (fp_size >= THREAD_SIZE)
+			fp_size = 0;
+	}
+	pr_info("[%016lx+%4ld][<%016lx>] %pS\n",
+		fp, fp_size, (unsigned long)ip, (void *)ip);
+}
+#else
 static void dump_backtrace_entry(unsigned long where)
 {
 	printk(" %pS\n", (void *)where);
 }
+#endif
 
 static void dump_kernel_instr(const char *lvl, struct pt_regs *regs)
 {
@@ -118,7 +148,12 @@ void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 	do {
 		/* skip until specified stack frame */
 		if (!skip) {
+		#ifdef CONFIG_AMLOGIC_VMAP
+			dump_backtrace_entry(frame.pc, frame.fp,
+					     (unsigned long)tsk->stack);
+		#else
 			dump_backtrace_entry(frame.pc);
+		#endif
 		} else if (frame.fp == regs->regs[29]) {
 			skip = 0;
 			/*
@@ -128,7 +163,12 @@ void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk)
 			 * at which an exception has taken place, use regs->pc
 			 * instead.
 			 */
+		#ifdef CONFIG_AMLOGIC_VMAP
+			dump_backtrace_entry(regs->pc, frame.fp,
+					     (unsigned long)tsk->stack);
+		#else
 			dump_backtrace_entry(regs->pc);
+		#endif
 		}
 	} while (!unwind_frame(tsk, &frame));
 
@@ -205,6 +245,129 @@ void die(const char *str, struct pt_regs *regs, int err)
 		do_exit(SIGSEGV);
 }
 
+#ifdef CONFIG_AMLOGIC_USER_FAULT
+static long get_user_pfn(struct mm_struct *mm, unsigned long addr)
+{
+	long pfn = -1;
+	pgd_t *pgd;
+
+	if (!mm || addr >= VMALLOC_START)
+		mm = &init_mm;
+
+	pgd = pgd_offset(mm, addr);
+
+	do {
+		pud_t *pud;
+		pmd_t *pmd;
+		pte_t *pte;
+
+		if (pgd_none(*pgd) || pgd_bad(*pgd))
+			break;
+
+		pud = pud_offset(pgd, addr);
+		if (pud_none(*pud) || pud_bad(*pud))
+			break;
+
+		pmd = pmd_offset(pud, addr);
+		if (pmd_none(*pmd) || pmd_bad(*pmd))
+			break;
+
+		pte = pte_offset_map(pmd, addr);
+		pfn = pte_pfn(*pte);
+		pte_unmap(pte);
+	} while (0);
+
+	return pfn;
+}
+
+void show_all_pfn(struct task_struct *task, struct pt_regs *regs)
+{
+	int i;
+	long pfn1, far;
+	char s1[10];
+	int top;
+
+	if (compat_user_mode(regs))
+		top = 15;
+	else
+		top = 31;
+	pr_info("reg              value       pfn  ");
+	pr_cont("reg              value       pfn\n");
+	for (i = 0; i < top; i++) {
+		pfn1 = get_user_pfn(task->mm, regs->regs[i]);
+		if (pfn1 >= 0)
+			sprintf(s1, "%8lx", pfn1);
+		else
+			sprintf(s1, "--------");
+		if (i % 2 == 1)
+			pr_cont("r%-2d:  %016llx  %s\n", i, regs->regs[i], s1);
+		else
+			pr_info("r%-2d:  %016llx  %s  ", i, regs->regs[i], s1);
+	}
+	pr_cont("\n");
+	pfn1 = get_user_pfn(task->mm, regs->pc);
+	if (pfn1 >= 0)
+		sprintf(s1, "%8lx", pfn1);
+	else
+		sprintf(s1, "--------");
+	pr_info("pc :  %016llx  %s\n", regs->pc, s1);
+	pfn1 = get_user_pfn(task->mm, regs->sp);
+	if (pfn1 >= 0)
+		sprintf(s1, "%8lx", pfn1);
+	else
+		sprintf(s1, "--------");
+	pr_info("sp :  %016llx  %s\n", regs->sp, s1);
+
+	far = read_sysreg(far_el1);
+	pfn1 = get_user_pfn(task->mm, far);
+	if (pfn1 >= 0)
+		sprintf(s1, "%8lx", pfn1);
+	else
+		sprintf(s1, "--------");
+	pr_info("unused :  %016lx  %s\n", far, s1);
+	pr_info("offset :  %016lx\n", kaslr_offset());
+}
+
+static int (*dmc_cb)(char *);
+void set_dump_dmc_func(void *f)
+{
+	dmc_cb =  (void *)f;
+}
+
+static size_t str_end_char(const char *s, size_t count, int c)
+{
+	size_t len = count, offset = count;
+
+	while (count--) {
+		if (*s == (char)c)
+			offset = len - count;
+		if (*s++ == '\0') {
+			offset = len - count;
+			break;
+		}
+	}
+	return offset;
+}
+
+void _dump_dmc_reg(void)
+{
+	static char buf[2048] = {0};
+	int len, i = 0, offset = 0;
+
+	if (!dmc_cb)
+		return;
+	len = dmc_cb(buf);
+
+	while (i < len) {
+		offset = str_end_char(buf, 512, '\n');
+		pr_crit("%.*s", offset, buf + i);
+		i += offset;
+	}
+	pr_crit("\n");
+}
+EXPORT_SYMBOL(set_dump_dmc_func);
+#endif /* CONFIG_AMLOGIC_USER_FAULT */
+
 static void arm64_show_signal(int signo, const char *str)
 {
 	static DEFINE_RATELIMIT_STATE(rs, DEFAULT_RATELIMIT_INTERVAL,
@@ -214,12 +377,19 @@ static void arm64_show_signal(int signo, const char *str)
 	struct pt_regs *regs = task_pt_regs(tsk);
 
 	/* Leave if the signal won't be shown */
+#ifndef CONFIG_AMLOGIC_USER_FAULT
 	if (!show_unhandled_signals ||
 	    !unhandled_signal(tsk, signo) ||
 	    !__ratelimit(&rs))
+#else
+	if (!show_unhandled_signals ||
+		(!unhandled_signal(tsk, signo) &&
+		!(show_unhandled_signals & 0xe)) ||
+		!__ratelimit(&rs))
+#endif
 		return;
 
-	pr_info("%s[%d]: unhandled exception: ", tsk->comm, task_pid_nr(tsk));
+	pr_info("%s[%d]: unhandled exception: %d ", tsk->comm, task_pid_nr(tsk), signo);
 	if (esr)
 		pr_cont("%s, ESR 0x%08x, ", esr_get_class_string(esr), esr);
 
@@ -227,6 +397,12 @@ static void arm64_show_signal(int signo, const char *str)
 	print_vma_addr(KERN_CONT " in ", regs->pc);
 	pr_cont("\n");
 	__show_regs(regs);
+#ifdef CONFIG_AMLOGIC_USER_FAULT
+	show_all_pfn(current, regs);
+	if (regs && kexec_should_crash(current) && (show_unhandled_signals & 4))
+		crash_kexec(regs);
+
+#endif
 }
 
 void arm64_force_sig_fault(int signo, int code, void __user *addr,
@@ -794,6 +970,11 @@ asmlinkage void bad_mode(struct pt_regs *regs, int reason, unsigned int esr)
 		handler[reason], smp_processor_id(), esr,
 		esr_get_class_string(esr));
 
+#ifdef CONFIG_AMLOGIC_USER_FAULT
+	show_all_pfn(current, regs);
+	_dump_dmc_reg();
+#endif /* CONFIG_AMLOGIC_USER_FAULT */
+
 	local_daif_mask();
 	panic("bad mode");
 }
@@ -808,6 +989,11 @@ asmlinkage void bad_el0_sync(struct pt_regs *regs, int reason, unsigned int esr)
 
 	current->thread.fault_address = 0;
 	current->thread.fault_code = esr;
+
+#ifdef CONFIG_AMLOGIC_USER_FAULT
+	show_all_pfn(current, regs);
+	_dump_dmc_reg();
+#endif /* CONFIG_AMLOGIC_USER_FAULT */
 
 	arm64_force_sig_fault(SIGILL, ILL_ILLOPC, pc,
 			      "Bad EL0 synchronous exception");
@@ -856,6 +1042,10 @@ void __noreturn arm64_serror_panic(struct pt_regs *regs, u32 esr)
 
 	pr_crit("SError Interrupt on CPU%d, code 0x%08x -- %s\n",
 		smp_processor_id(), esr, esr_get_class_string(esr));
+
+#ifdef CONFIG_AMLOGIC_USER_FAULT
+	_dump_dmc_reg();
+#endif
 	if (regs)
 		__show_regs(regs);
 
@@ -897,10 +1087,29 @@ bool arm64_is_fatal_ras_serror(struct pt_regs *regs, unsigned int esr)
 	}
 }
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+static int ignore_serror;
+static int __init param_setup_ignore_serror(char *str)
+{
+	int ret =  kstrtoint(str, 0, &ignore_serror);
+
+	pr_info("ignore_serror = %d, ret = %d\n", ignore_serror, ret);
+
+	return 0;
+}
+
+early_param("ignore_serror", param_setup_ignore_serror);
+#endif
+
 asmlinkage void do_serror(struct pt_regs *regs, unsigned int esr)
 {
 	const bool was_in_nmi = in_nmi();
-
+#ifdef CONFIG_AMLOGIC_MODIFY
+	if (ignore_serror) {
+		pr_crit("\nSerror:%s,%d,\n", __func__, __LINE__);
+		return;
+	}
+#endif
 	if (!was_in_nmi)
 		nmi_enter();
 

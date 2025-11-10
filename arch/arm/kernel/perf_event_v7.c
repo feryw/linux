@@ -946,7 +946,11 @@ static void armv7pmu_disable_event(struct perf_event *event)
 	raw_spin_unlock_irqrestore(&events->pmu_lock, flags);
 }
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+static irqreturn_t armv7pmu_handle_irq(int irq_num, struct arm_pmu *cpu_pmu)
+#else
 static irqreturn_t armv7pmu_handle_irq(struct arm_pmu *cpu_pmu)
+#endif
 {
 	u32 pmnc;
 	struct perf_sample_data data;
@@ -959,6 +963,16 @@ static irqreturn_t armv7pmu_handle_irq(struct arm_pmu *cpu_pmu)
 	 */
 	pmnc = armv7_pmnc_getreset_flags();
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+	if (!amlpmu_ctx.private_interrupts) {
+		/* amlpmu have routed the interrupt already, so return IRQ_HANDLED */
+		amlpmu_handle_irq(cpu_pmu, irq_num,
+				  armv7_pmnc_has_overflowed(pmnc));
+
+		if (!armv7_pmnc_has_overflowed(pmnc))
+			return IRQ_HANDLED;
+	}
+#endif
 	/*
 	 * Did an overflow occur?
 	 */

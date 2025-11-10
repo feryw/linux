@@ -3813,8 +3813,8 @@ bounce_sync_single(struct device *dev, dma_addr_t addr, size_t size,
 		return;
 
 	tlb_addr = intel_iommu_iova_to_phys(&domain->domain, addr);
-	if (is_swiotlb_buffer(tlb_addr))
-		swiotlb_tbl_sync_single(dev, tlb_addr, size, dir, target);
+	if (is_swiotlb_buffer(dev, tlb_addr))
+		swiotlb_sync_single_for_cpu(dev, tlb_addr, size, dir);
 }
 
 static dma_addr_t
@@ -3861,7 +3861,6 @@ bounce_map_single(struct device *dev, phys_addr_t paddr, size_t size,
 	 */
 	if (!IS_ALIGNED(paddr | size, VTD_PAGE_SIZE)) {
 		tlb_addr = swiotlb_tbl_map_single(dev,
-				__phys_to_dma(dev, io_tlb_start),
 				paddr, size, aligned_size, dir, attrs);
 		if (tlb_addr == DMA_MAPPING_ERROR) {
 			goto swiotlb_error;
@@ -3893,9 +3892,8 @@ bounce_map_single(struct device *dev, phys_addr_t paddr, size_t size,
 	return (phys_addr_t)iova_pfn << PAGE_SHIFT;
 
 mapping_error:
-	if (is_swiotlb_buffer(tlb_addr))
-		swiotlb_tbl_unmap_single(dev, tlb_addr, size,
-					 aligned_size, dir, attrs);
+	if (is_swiotlb_buffer(dev, tlb_addr))
+		swiotlb_tbl_unmap_single(dev, tlb_addr, size, dir, attrs);
 swiotlb_error:
 	free_iova_fast(&domain->iovad, iova_pfn, dma_to_mm_pfn(nrpages));
 	dev_err(dev, "Device bounce map: %zx@%llx dir %d --- failed\n",
@@ -3908,7 +3906,6 @@ static void
 bounce_unmap_single(struct device *dev, dma_addr_t dev_addr, size_t size,
 		    enum dma_data_direction dir, unsigned long attrs)
 {
-	size_t aligned_size = ALIGN(size, VTD_PAGE_SIZE);
 	struct dmar_domain *domain;
 	phys_addr_t tlb_addr;
 
@@ -3921,9 +3918,8 @@ bounce_unmap_single(struct device *dev, dma_addr_t dev_addr, size_t size,
 		return;
 
 	intel_unmap(dev, dev_addr, size);
-	if (is_swiotlb_buffer(tlb_addr))
-		swiotlb_tbl_unmap_single(dev, tlb_addr, size,
-					 aligned_size, dir, attrs);
+	if (is_swiotlb_buffer(dev, tlb_addr))
+		swiotlb_tbl_unmap_single(dev, tlb_addr, size, dir, attrs);
 
 	trace_bounce_unmap_single(dev, dev_addr, size);
 }
@@ -5453,7 +5449,7 @@ static void intel_iommu_aux_detach_device(struct iommu_domain *domain,
 
 static int intel_iommu_map(struct iommu_domain *domain,
 			   unsigned long iova, phys_addr_t hpa,
-			   size_t size, int iommu_prot)
+			   size_t size, int iommu_prot, gfp_t gfp)
 {
 	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
 	u64 max_addr;

@@ -27,6 +27,13 @@
 #include "sdio_ops.h"
 #include "sdio_cis.h"
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+struct wifi_clk_table aWifi_clk[WIFI_CLOCK_TABLE_MAX] = {
+	{"8822BS", 0, 0xb822, 167000000},
+	{"8822CS", 0, 0xc822, 167000000},
+	{"qca6174", 0, 0x50a, 167000000}
+};
+#endif
 static int sdio_read_fbr(struct sdio_func *func)
 {
 	int ret;
@@ -441,6 +448,9 @@ static int sdio_set_bus_speed_mode(struct mmc_card *card)
 	int err;
 	unsigned char speed;
 	unsigned int max_rate;
+#ifdef CONFIG_AMLOGIC_MODIFY
+	int i;
+#endif
 
 	/*
 	 * If the host doesn't support any of the UHS-I modes, fallback on
@@ -455,7 +465,20 @@ static int sdio_set_bus_speed_mode(struct mmc_card *card)
 	    (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_SDR104)) {
 			bus_speed = SDIO_SPEED_SDR104;
 			timing = MMC_TIMING_UHS_SDR104;
+#ifdef CONFIG_AMLOGIC_MODIFY
+			for (i = 0; i < ARRAY_SIZE(aWifi_clk); i++) {
+				if (aWifi_clk[i].m_use_flag) {
+					card->sw_caps.uhs_max_dtr =
+						aWifi_clk[i].m_uhs_max_dtr;
+					break;
+				}
+			}
+
+			if (i >= ARRAY_SIZE(aWifi_clk))
+				card->sw_caps.uhs_max_dtr = UHS_SDR104_MAX_DTR;
+#else
 			card->sw_caps.uhs_max_dtr = UHS_SDR104_MAX_DTR;
+#endif
 			card->sd_bus_speed = UHS_SDR104_BUS_SPEED;
 	} else if ((card->host->caps & MMC_CAP_UHS_DDR50) &&
 		   (card->sw_caps.sd3_bus_mode & SD_MODE_UHS_DDR50)) {
@@ -1247,3 +1270,48 @@ err:
 	return err;
 }
 
+int sdio_reset_comm(struct mmc_card *card)
+{
+	struct mmc_host *host = card->host;
+	u32 ocr;
+	u32 rocr;
+	int err;
+
+	pr_err("%s():\n", __func__);
+	mmc_claim_host(host);
+
+	mmc_retune_disable(host);
+
+	/* for realtek sdio wifi && mtk7668
+	 * need send IO reset command firstly
+	 */
+	if (card->cis.vendor == 588 || card->cis.vendor == 890)
+		sdio_reset(host);
+
+	mmc_go_idle(host);
+
+	mmc_set_clock(host, host->f_min);
+
+	err = mmc_send_io_op_cond(host, 0, &ocr);
+	if (err)
+		goto err;
+
+	rocr = mmc_select_voltage(host, ocr);
+	if (!rocr) {
+		err = -EINVAL;
+		goto err;
+	}
+
+	err = mmc_sdio_init_card(host, rocr, card);
+	if (err)
+		goto err;
+
+	mmc_release_host(host);
+	return 0;
+err:
+	pr_err("%s: Error resetting SDIO communications (%d)\n",
+	       mmc_hostname(host), err);
+	mmc_release_host(host);
+	return err;
+}
+EXPORT_SYMBOL(sdio_reset_comm);

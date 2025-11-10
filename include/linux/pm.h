@@ -15,6 +15,7 @@
 #include <linux/timer.h>
 #include <linux/hrtimer.h>
 #include <linux/completion.h>
+#include <linux/android_kabi.h>
 
 /*
  * Callbacks for platform drivers to implement.
@@ -299,6 +300,8 @@ struct dev_pm_ops {
 	int (*runtime_suspend)(struct device *dev);
 	int (*runtime_resume)(struct device *dev);
 	int (*runtime_idle)(struct device *dev);
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 #ifdef CONFIG_PM_SLEEP
@@ -470,6 +473,15 @@ const struct dev_pm_ops name = { \
 
 #define PMSG_IS_AUTO(msg)	(((msg).event & PM_EVENT_AUTO) != 0)
 
+#ifdef CONFIG_AMLOGIC_USB
+#define PMSG_IS_FREEZE(msg)	(((msg).event & PM_EVENT_FREEZE) != 0)
+#define PMSG_IS_THAW(msg)	(((msg).event & PM_EVENT_THAW) != 0)
+#define PMSG_IS_RESTORE(msg)	(((msg).event & PM_EVENT_RESTORE) != 0)
+
+#define PMSG_IS_SUSPEND(msg)	(((msg).event & PM_EVENT_SUSPEND) != 0)
+#define PMSG_IS_RESUME(msg)	(((msg).event & PM_EVENT_RESUME) != 0)
+#endif
+
 /*
  * Device run-time power management status.
  *
@@ -629,6 +641,9 @@ struct dev_pm_info {
 	struct pm_subsys_data	*subsys_data;  /* Owned by the subsystem. */
 	void (*set_latency_tolerance)(struct device *, s32);
 	struct dev_pm_qos	*qos;
+
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
 };
 
 extern int dev_pm_get_subsys_data(struct device *dev);
@@ -653,6 +668,8 @@ struct dev_pm_domain {
 	int (*activate)(struct device *dev);
 	void (*sync)(struct device *dev);
 	void (*dismiss)(struct device *dev);
+
+	ANDROID_KABI_RESERVE(1);
 };
 
 /*

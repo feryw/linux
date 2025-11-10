@@ -535,7 +535,7 @@ static int mlock_fixup(struct vm_area_struct *vma, struct vm_area_struct **prev,
 	pgoff = vma->vm_pgoff + ((start - vma->vm_start) >> PAGE_SHIFT);
 	*prev = vma_merge(mm, *prev, start, end, newflags, vma->anon_vma,
 			  vma->vm_file, pgoff, vma_policy(vma),
-			  vma->vm_userfaultfd_ctx);
+			  vma->vm_userfaultfd_ctx, vma_get_anon_name(vma));
 	if (*prev) {
 		vma = *prev;
 		goto success;
@@ -611,6 +611,28 @@ static int apply_vma_lock_flags(unsigned long start, size_t len,
 		tmp = vma->vm_end;
 		if (tmp > end)
 			tmp = end;
+	#ifdef CONFIG_AMLOGIC_PIN_LOCKED_FILE
+		if (vma->vm_file && vma->vm_file->f_mapping) {
+			struct inode *host;
+
+			host = vma->vm_file->f_mapping->host;
+			if ((flags & (VM_LOCKED | VM_LOCKONFAULT))) {
+				set_bit(AS_LOCK_MAPPING,
+					&vma->vm_file->f_mapping->flags);
+				atomic_inc(&host->i_count);
+			} else if (test_bit(AS_LOCK_MAPPING,
+				   &vma->vm_file->f_mapping->flags)){
+				atomic_dec(&host->i_count);
+				clear_bit(AS_LOCK_MAPPING,
+					  &vma->vm_file->f_mapping->flags);
+			}
+			pr_debug("%s lock mapping:%px, f:%lx\n",
+				flags & (VM_LOCKED | VM_LOCKONFAULT) ?
+				"Mark" : "Clear",
+				vma->vm_file->f_mapping,
+				vma->vm_file->f_mapping->flags);
+		}
+	#endif
 		error = mlock_fixup(vma, &prev, nstart, tmp, newflags);
 		if (error)
 			break;

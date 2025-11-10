@@ -70,6 +70,16 @@
 #include <linux/psi.h>
 #include <linux/khugepaged.h>
 
+#ifdef CONFIG_AMLOGIC_PAGE_TRACE
+#include <linux/amlogic/page_trace.h>
+#endif
+#ifdef CONFIG_AMLOGIC_CMA
+#include <linux/amlogic/aml_cma.h>
+#endif
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+#include <linux/amlogic/memory.h>
+#endif
+
 #include <asm/sections.h>
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -294,10 +304,10 @@ const char * const migratetype_names[MIGRATE_TYPES] = {
 	"Unmovable",
 	"Movable",
 	"Reclaimable",
-	"HighAtomic",
 #ifdef CONFIG_CMA
 	"CMA",
 #endif
+	"HighAtomic",
 #ifdef CONFIG_MEMORY_ISOLATION
 	"Isolate",
 #endif
@@ -314,6 +324,11 @@ compound_page_dtor * const compound_page_dtors[] = {
 #endif
 };
 
+/*
+ * Try to keep at least this much lowmem free.  Do not allow normal
+ * allocations below this point, only high priority ones. Automatically
+ * tuned according to the amount of memory in the system.
+ */
 int min_free_kbytes = 1024;
 int user_min_free_kbytes = -1;
 #ifdef CONFIG_DISCONTIGMEM
@@ -331,6 +346,13 @@ int watermark_boost_factor __read_mostly;
 int watermark_boost_factor __read_mostly = 15000;
 #endif
 int watermark_scale_factor = 10;
+
+/*
+ * Extra memory for the system to try freeing. Used to temporarily
+ * free memory, to make space for new workloads. Anyone can allocate
+ * down to the min watermarks controlled by min_free_kbytes above.
+ */
+int extra_free_kbytes = 0;
 
 static unsigned long nr_kernel_pages __initdata;
 static unsigned long nr_all_pages __initdata;
@@ -1000,7 +1022,16 @@ done_merging:
 		add_to_free_area_random(page, &zone->free_area[order],
 				migratetype);
 	else
+	#if defined(CONFIG_AMLOGIC_MEMORY_EXTEND) && defined(CONFIG_KASAN)
+		/*
+		 * always put freed page to tail of buddy system, in order to increase
+		 *  probability of use-after-free for KASAN check.
+		 */
+		add_to_free_area_tail(page, &zone->free_area[order], migratetype);
+	#else
 		add_to_free_area(page, &zone->free_area[order], migratetype);
+	#endif
+
 
 }
 
@@ -1184,6 +1215,9 @@ static __always_inline bool free_pages_prepare(struct page *page,
 		kernel_map_pages(page, 1 << order, 0);
 
 	kasan_free_nondeferred_pages(page, order);
+#ifdef CONFIG_AMLOGIC_PAGE_TRACE
+	reset_page_trace(page, order);
+#endif /* CONFIG_AMLOGIC_PAGE_TRACE */
 
 	return true;
 }
@@ -2716,42 +2750,124 @@ do_steal:
  * Do the hard work of removing an element from the buddy allocator.
  * Call me with the zone->lock already held.
  */
+#ifdef CONFIG_AMLOGIC_CMA
+static __always_inline struct page *
+__rmqueue(struct zone *zone, unsigned int order, int migratetype,
+						unsigned int alloc_flags, bool cma)
+#else
 static __always_inline struct page *
 __rmqueue(struct zone *zone, unsigned int order, int migratetype,
 						unsigned int alloc_flags)
+#endif
 {
 	struct page *page;
 
+#ifdef CONFIG_AMLOGIC_CMA
+	/* use CMA first */
+	if (migratetype == MIGRATE_MOVABLE && cma) {
+		page = __rmqueue_cma_fallback(zone, order);
+		if (page) {
+			trace_mm_page_alloc_zone_locked(page, order,
+							MIGRATE_CMA);
+			return page;
+		}
+	}
+#endif /* CONFIG_AMLOGIC_CMA */
+
 retry:
 	page = __rmqueue_smallest(zone, order, migratetype);
-	if (unlikely(!page)) {
-		if (migratetype == MIGRATE_MOVABLE)
-			page = __rmqueue_cma_fallback(zone, order);
 
-		if (!page && __rmqueue_fallback(zone, order, migratetype,
-								alloc_flags))
-			goto retry;
-	}
+	if (unlikely(!page) && __rmqueue_fallback(zone, order, migratetype,
+						  alloc_flags))
+		goto retry;
 
 	trace_mm_page_alloc_zone_locked(page, order, migratetype);
 	return page;
 }
+
+#ifdef CONFIG_AMLOGIC_CMA
+/*
+ * get page but not cma
+ */
+static struct page *rmqueue_no_cma(struct zone *zone, unsigned int order,
+				   int migratetype, unsigned int alloc_flags)
+{
+	struct page *page;
+
+	spin_lock(&zone->lock);
+retry:
+	page = __rmqueue_smallest(zone, order, migratetype);
+	if (unlikely(!page)) {
+		if (!page && __rmqueue_fallback(zone, order, migratetype, alloc_flags))
+			goto retry;
+	}
+	WARN_ON(page && is_migrate_cma(get_pcppage_migratetype(page)));
+	if (page)
+		__mod_zone_page_state(zone, NR_FREE_PAGES, -(1 << order));
+
+	spin_unlock(&zone->lock);
+	return page;
+}
+#endif /* CONFIG_AMLOGIC_CMA */
+
+#ifdef CONFIG_CMA
+static struct page *__rmqueue_cma(struct zone *zone, unsigned int order,
+				  int migratetype,
+				  unsigned int alloc_flags)
+{
+	struct page *page = 0;
+
+	if (IS_ENABLED(CONFIG_CMA))
+		if (!zone->cma_alloc)
+			page = __rmqueue_cma_fallback(zone, order);
+	trace_mm_page_alloc_zone_locked(page, order, MIGRATE_CMA);
+	return page;
+}
+#else
+static inline struct page *__rmqueue_cma(struct zone *zone, unsigned int order,
+					 int migratetype,
+					 unsigned int alloc_flags)
+{
+	return NULL;
+}
+#endif
 
 /*
  * Obtain a specified number of elements from the buddy allocator, all under
  * a single hold of the lock, for efficiency.  Add them to the supplied list.
  * Returns the number of new pages which were placed at *list.
  */
+#ifdef CONFIG_AMLOGIC_CMA
+static int rmqueue_bulk(struct zone *zone, unsigned int order,
+			unsigned long count, struct list_head *list,
+			int migratetype, unsigned int alloc_flags, bool cma)
+#else
 static int rmqueue_bulk(struct zone *zone, unsigned int order,
 			unsigned long count, struct list_head *list,
 			int migratetype, unsigned int alloc_flags)
+#endif
 {
 	int i, alloced = 0;
 
 	spin_lock(&zone->lock);
 	for (i = 0; i < count; ++i) {
-		struct page *page = __rmqueue(zone, order, migratetype,
-								alloc_flags);
+		struct page *page;
+
+		/*
+		 * If migrate type CMA is being requested only try to
+		 * satisfy the request with CMA pages to try and increase
+		 * CMA utlization.
+		 */
+		if (is_migrate_cma(migratetype))
+			page = __rmqueue_cma(zone, order, migratetype,
+					     alloc_flags);
+		else
+			#ifdef CONFIG_AMLOGIC_CMA
+			page = __rmqueue(zone, order, migratetype, alloc_flags, cma);
+			#else
+			page = __rmqueue(zone, order, migratetype, alloc_flags);
+			#endif
+
 		if (unlikely(page == NULL))
 			break;
 
@@ -2784,6 +2900,38 @@ static int rmqueue_bulk(struct zone *zone, unsigned int order,
 	__mod_zone_page_state(zone, NR_FREE_PAGES, -(i << order));
 	spin_unlock(&zone->lock);
 	return alloced;
+}
+
+/*
+ * Return the pcp list that corresponds to the migrate type if that list isn't
+ * empty.
+ * If the list is empty return NULL.
+ */
+ #ifdef CONFIG_AMLOGIC_CMA
+static struct list_head *get_populated_pcp_list(struct zone *zone,
+			unsigned int order, struct per_cpu_pages *pcp,
+			int migratetype, unsigned int alloc_flags, bool cma)
+#else
+static struct list_head *get_populated_pcp_list(struct zone *zone,
+			unsigned int order, struct per_cpu_pages *pcp,
+			int migratetype, unsigned int alloc_flags)
+#endif
+{
+	struct list_head *list = &pcp->lists[migratetype];
+
+	if (list_empty(list)) {
+		pcp->count += rmqueue_bulk(zone, order,
+				pcp->batch, list,
+ #ifdef CONFIG_AMLOGIC_CMA
+				migratetype, alloc_flags, cma);
+ #else
+				migratetype, alloc_flags);
+ #endif
+
+		if (list_empty(list))
+			list = NULL;
+	}
+	return list;
 }
 
 #ifdef CONFIG_NUMA
@@ -3052,7 +3200,15 @@ static void free_unref_page_commit(struct page *page, unsigned long pfn)
 	}
 
 	pcp = &this_cpu_ptr(zone->pageset)->pcp;
+	#if defined(CONFIG_AMLOGIC_MEMORY_EXTEND) && defined(CONFIG_KASAN)
+	/*
+	 * always put freed page to tail of buddy system, in  order to
+	 * increase probability of use-after-free for KASAN check.
+	 */
+	list_add_tail(&page->lru, &pcp->lists[migratetype]);
+	#else
 	list_add(&page->lru, &pcp->lists[migratetype]);
+	#endif
 	pcp->count++;
 	if (pcp->count >= pcp->high) {
 		unsigned long batch = READ_ONCE(pcp->batch);
@@ -3215,20 +3371,85 @@ static inline void zone_statistics(struct zone *preferred_zone, struct zone *z)
 static struct page *__rmqueue_pcplist(struct zone *zone, int migratetype,
 			unsigned int alloc_flags,
 			struct per_cpu_pages *pcp,
-			struct list_head *list)
+			gfp_t gfp_flags)
 {
-	struct page *page;
+	struct page *page = NULL;
+	struct list_head *list = NULL;
+#ifdef CONFIG_AMLOGIC_CMA
+	bool cma = can_use_cma(gfp_flags);
+#endif
 
 	do {
-		if (list_empty(list)) {
-			pcp->count += rmqueue_bulk(zone, 0,
-					pcp->batch, list,
+		/* First try to get CMA pages */
+		if (migratetype == MIGRATE_MOVABLE &&
+				gfp_flags & __GFP_CMA) {
+			list = get_populated_pcp_list(zone, 0, pcp,
+#ifdef CONFIG_AMLOGIC_CMA
+					get_cma_migrate_type(), alloc_flags, cma);
+#else
+					get_cma_migrate_type(), alloc_flags);
+#endif
+		}
+
+		if (list == NULL) {
+			/*
+			 * Either CMA is not suitable or there are no
+			 * free CMA pages.
+			 */
+			list = get_populated_pcp_list(zone, 0, pcp,
+#ifdef CONFIG_AMLOGIC_CMA
+					migratetype, alloc_flags, cma);
+#else
 					migratetype, alloc_flags);
-			if (unlikely(list_empty(list)))
+#endif
+			if (unlikely(list == NULL) ||
+					unlikely(list_empty(list)))
 				return NULL;
 		}
 
 		page = list_first_entry(list, struct page, lru);
+	#ifdef CONFIG_AMLOGIC_CMA
+		/*
+		 * USING CMA FIRST POLICY situations:
+		 * 1. CMA pages may return to pcp and allocated next
+		 *    but gfp mask is not suitable for CMA;
+		 * 2. MOVABLE pages may return to pcp and allocated next
+		 *    but gfp mask is suitable for CMA
+		 *
+		 * For 1, we should replace a none-CMA page
+		 * For 2, we should replace with a cma page
+		 * before page is deleted from PCP list.
+		 */
+		if (!cma && is_migrate_cma_page(page)) {
+			/* case 1 */
+			page = rmqueue_no_cma(zone, 0, migratetype, alloc_flags);
+			if (page) {
+				check_new_pcp(page);
+				return page;
+			} else {
+				return NULL;
+			}
+		} else if ((migratetype == MIGRATE_MOVABLE) &&
+			   (get_pcppage_migratetype(page) != MIGRATE_CMA) &&
+			   cma) {
+			struct page *t;
+
+			spin_lock(&zone->lock);
+			t = __rmqueue_cma_fallback(zone, 0);
+			/* can't alloc cma pages or not ready */
+			if (!t || check_new_pcp(page)) {
+				spin_unlock(&zone->lock);
+				goto use_pcp;
+			}
+			page = t;
+			__mod_zone_freepage_state(zone, -(1),
+						  get_pcppage_migratetype(t));
+			spin_unlock(&zone->lock);
+			check_new_pcp(page);
+			return page;
+		}
+use_pcp:
+	#endif /* CONFIG_AMLOGIC_CMA */
 		list_del(&page->lru);
 		pcp->count--;
 	} while (check_new_pcp(page));
@@ -3242,14 +3463,13 @@ static struct page *rmqueue_pcplist(struct zone *preferred_zone,
 			int migratetype, unsigned int alloc_flags)
 {
 	struct per_cpu_pages *pcp;
-	struct list_head *list;
 	struct page *page;
 	unsigned long flags;
 
 	local_irq_save(flags);
 	pcp = &this_cpu_ptr(zone->pageset)->pcp;
-	list = &pcp->lists[migratetype];
-	page = __rmqueue_pcplist(zone,  migratetype, alloc_flags, pcp, list);
+	page = __rmqueue_pcplist(zone,  migratetype, alloc_flags, pcp,
+				 gfp_flags);
 	if (page) {
 		__count_zid_vm_events(PGALLOC, page_zonenum(page), 1);
 		zone_statistics(preferred_zone, zone);
@@ -3269,6 +3489,9 @@ struct page *rmqueue(struct zone *preferred_zone,
 {
 	unsigned long flags;
 	struct page *page;
+#ifdef CONFIG_AMLOGIC_CMA
+	bool cma = can_use_cma(gfp_flags);
+#endif
 
 	if (likely(order == 0)) {
 		page = rmqueue_pcplist(preferred_zone, zone, gfp_flags,
@@ -3285,14 +3508,26 @@ struct page *rmqueue(struct zone *preferred_zone,
 
 	do {
 		page = NULL;
+
 		if (alloc_flags & ALLOC_HARDER) {
 			page = __rmqueue_smallest(zone, order, MIGRATE_HIGHATOMIC);
 			if (page)
 				trace_mm_page_alloc_zone_locked(page, order, migratetype);
 		}
+
+		if (!page && migratetype == MIGRATE_MOVABLE &&
+				gfp_flags & __GFP_CMA)
+			page = __rmqueue_cma(zone, order, migratetype,
+					     alloc_flags);
+
 		if (!page)
+			#ifdef CONFIG_AMLOGIC_CMA
+			page = __rmqueue(zone, order, migratetype, alloc_flags, cma);
+			#else
 			page = __rmqueue(zone, order, migratetype, alloc_flags);
+			#endif
 	} while (page && check_new_pages(page, order));
+
 	spin_unlock(&zone->lock);
 	if (!page)
 		goto failed;
@@ -3404,7 +3639,14 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 {
 	long min = mark;
 	int o;
+#ifndef CONFIG_AMLOGIC_CMA
 	const bool alloc_harder = (alloc_flags & (ALLOC_HARDER|ALLOC_OOM));
+#else
+	bool alloc_harder = (alloc_flags & (ALLOC_HARDER | ALLOC_OOM));
+
+	if (unlikely(rt_task(current)))
+		alloc_harder = true;
+#endif
 
 	/* free_pages may go negative - that's OK */
 	free_pages -= (1 << order) - 1;
@@ -3444,8 +3686,39 @@ bool __zone_watermark_ok(struct zone *z, unsigned int order, unsigned long mark,
 	 * are not met, then a high-order request also cannot go ahead
 	 * even if a suitable page happened to be free.
 	 */
+#ifdef CONFIG_AMLOGIC_CMA
+	/* cma first after system boot, dont care the watermark when:
+	 * 1) total ram is smaller than 1G or
+	 * 2) cma pages is more than 30% of totalram  (total - reserved)
+	 */
+	if ((totalcma_pages * 10 > 3 * totalram_pages() ||
+		totalram_pages() < 262144) &&
+		(system_state == SYSTEM_RUNNING &&
+		unlikely(!cma_first_wm_low))) {
+		cma_first_wm_low = true;
+		pr_info("Now can use cma1, free:%ld, wm:%ld, cma:%ld, total:%ld\n",
+			free_pages, min + z->lowmem_reserve[classzone_idx],
+			totalcma_pages, totalram_pages());
+	}
+	if (free_pages <= min + z->lowmem_reserve[classzone_idx]) {
+		/* do not using cma until water mark is low */
+		if (unlikely(!cma_first_wm_low && free_pages > 0)) {
+			cma_first_wm_low = true;
+			pr_info("Now can use cma, free:%ld, wm:%ld\n",
+				free_pages,
+				min + z->lowmem_reserve[classzone_idx]);
+		}
+		if (unlikely(no_filecache_in_cma)) {
+			no_filecache_in_cma = false;
+			pr_info("Now filecache can use cma, wm:%ld, cma:%ld\n",
+				min + z->lowmem_reserve[classzone_idx], totalcma_pages);
+		}
+		return false;
+	}
+#else
 	if (free_pages <= min + z->lowmem_reserve[classzone_idx])
 		return false;
+#endif
 
 	/* If this is an order-0 request then the watermark is fine */
 	if (!order)
@@ -3490,6 +3763,12 @@ static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 {
 	long free_pages = zone_page_state(z, NR_FREE_PAGES);
 	long cma_pages = 0;
+
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+	/* ignore watermark for special flags */
+	if (gfp_mask == (GFP_ATOMIC | __GFP_HIGHMEM | __GFP_NO_CMA))
+		return true;
+#endif
 
 #ifdef CONFIG_CMA
 	/* If allocation can't use CMA areas don't use free CMA pages */
@@ -3682,6 +3961,12 @@ retry:
 			BUILD_BUG_ON(ALLOC_NO_WATERMARKS < NR_WMARK);
 			if (alloc_flags & ALLOC_NO_WATERMARKS)
 				goto try_this_zone;
+
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+			/* alloc harder if under softirq */
+			if (in_serving_softirq() && (gfp_mask & __GFP_ATOMIC))
+				goto try_this_zone;
+#endif
 
 			if (node_reclaim_mode == 0 ||
 			    !zone_allows_reclaim(ac->preferred_zoneref->zone, zone))
@@ -4771,6 +5056,9 @@ __alloc_pages_nodemask(gfp_t gfp_mask, unsigned int order, int preferred_nid,
 	 */
 	alloc_flags |= alloc_flags_nofragment(ac.preferred_zoneref->zone, gfp_mask);
 
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+	should_wakeup_kswap(gfp_mask, order, &ac);
+#endif
 	/* First allocation attempt */
 	page = get_page_from_freelist(alloc_mask, order, alloc_flags, &ac);
 	if (likely(page))
@@ -4802,6 +5090,9 @@ out:
 	}
 
 	trace_mm_page_alloc(page, order, alloc_mask, ac.migratetype);
+#ifdef CONFIG_AMLOGIC_PAGE_TRACE
+	set_page_trace(page, order, gfp_mask, NULL);
+#endif /* CONFIG_AMLOGIC_PAGE_TRACE */
 
 	return page;
 }
@@ -5289,8 +5580,15 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 	printk("active_anon:%lu inactive_anon:%lu isolated_anon:%lu\n"
 		" active_file:%lu inactive_file:%lu isolated_file:%lu\n"
 		" unevictable:%lu dirty:%lu writeback:%lu unstable:%lu\n"
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+		" slab_reclaimable:%lu slab_unreclaimable:%lu slab_unreclaimable_Order:%lu\n"
+#else
 		" slab_reclaimable:%lu slab_unreclaimable:%lu\n"
+#endif
 		" mapped:%lu shmem:%lu pagetables:%lu bounce:%lu\n"
+	#ifdef CONFIG_AMLOGIC_CMA
+		" [cma] driver:%lu anon:%lu file:%lu isolate:%lu total:%lu\n"
+	#endif /* CONFIG_AMLOGIC_CMA */
 		" free:%lu free_pcp:%lu free_cma:%lu\n",
 		global_node_page_state(NR_ACTIVE_ANON),
 		global_node_page_state(NR_INACTIVE_ANON),
@@ -5304,10 +5602,22 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 		global_node_page_state(NR_UNSTABLE_NFS),
 		global_node_page_state(NR_SLAB_RECLAIMABLE),
 		global_node_page_state(NR_SLAB_UNRECLAIMABLE),
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+		global_node_page_state(NR_SLAB_UNRECLAIMABLE_O),
+#endif
 		global_node_page_state(NR_FILE_MAPPED),
 		global_node_page_state(NR_SHMEM),
 		global_zone_page_state(NR_PAGETABLE),
 		global_zone_page_state(NR_BOUNCE),
+	#ifdef CONFIG_AMLOGIC_CMA
+		get_cma_allocated(),
+		global_zone_page_state(NR_INACTIVE_ANON_CMA) +
+		global_zone_page_state(NR_ACTIVE_ANON_CMA),
+		global_zone_page_state(NR_INACTIVE_FILE_CMA) +
+		global_zone_page_state(NR_ACTIVE_FILE_CMA),
+		global_zone_page_state(NR_CMA_ISOLATED),
+		totalcma_pages,
+	#endif /* CONFIG_AMLOGIC_CMA */
 		global_zone_page_state(NR_FREE_PAGES),
 		free_pcp,
 		global_zone_page_state(NR_FREE_CMA_PAGES));
@@ -5388,6 +5698,9 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			" managed:%lukB"
 			" mlocked:%lukB"
 			" kernel_stack:%lukB"
+#ifdef CONFIG_SHADOW_CALL_STACK
+			" shadow_call_stack:%lukB"
+#endif
 			" pagetables:%lukB"
 			" bounce:%lukB"
 			" free_pcp:%lukB"
@@ -5409,6 +5722,9 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 			K(zone_managed_pages(zone)),
 			K(zone_page_state(zone, NR_MLOCK)),
 			zone_page_state(zone, NR_KERNEL_STACK_KB),
+#ifdef CONFIG_SHADOW_CALL_STACK
+			zone_page_state(zone, NR_KERNEL_SCS_BYTES) / 1024,
+#endif
 			K(zone_page_state(zone, NR_PAGETABLE)),
 			K(zone_page_state(zone, NR_BOUNCE)),
 			K(free_pcp),
@@ -5424,6 +5740,9 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 		unsigned int order;
 		unsigned long nr[MAX_ORDER], flags, total = 0;
 		unsigned char types[MAX_ORDER];
+	#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+		unsigned long free_mt[MIGRATE_TYPES] = {0};
+	#endif
 
 		if (show_mem_node_skip(filter, zone_to_nid(zone), nodemask))
 			continue;
@@ -5440,6 +5759,9 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 
 			types[order] = 0;
 			for (type = 0; type < MIGRATE_TYPES; type++) {
+			#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+				free_mt[type] += (area->free_mt[type] << order);
+			#endif
 				if (!free_area_empty(area, type))
 					types[order] |= 1 << type;
 			}
@@ -5452,6 +5774,12 @@ void show_free_areas(unsigned int filter, nodemask_t *nodemask)
 				show_migration_types(types[order]);
 		}
 		printk(KERN_CONT "= %lukB\n", K(total));
+	#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+		for (order = 0; order < MIGRATE_TYPES; order++) {
+			pr_info("Free_%s:%ld\n", migratetype_names[order],
+				free_mt[order]);
+		}
+	#endif
 	}
 
 	hugetlb_show_meminfo();
@@ -6735,7 +7063,7 @@ static void __meminit pgdat_init_internals(struct pglist_data *pgdat)
 
 	pgdat_page_ext_init(pgdat);
 	spin_lock_init(&pgdat->lru_lock);
-	lruvec_init(node_lruvec(pgdat));
+	lruvec_init(&pgdat->__lruvec);
 }
 
 static void __meminit zone_init_internals(struct zone *zone, enum zone_type idx, int nid,
@@ -7777,6 +8105,7 @@ static void setup_per_zone_lowmem_reserve(void)
 static void __setup_per_zone_wmarks(void)
 {
 	unsigned long pages_min = min_free_kbytes >> (PAGE_SHIFT - 10);
+	unsigned long pages_low = extra_free_kbytes >> (PAGE_SHIFT - 10);
 	unsigned long lowmem_pages = 0;
 	struct zone *zone;
 	unsigned long flags;
@@ -7788,11 +8117,13 @@ static void __setup_per_zone_wmarks(void)
 	}
 
 	for_each_zone(zone) {
-		u64 tmp;
+		u64 tmp, low;
 
 		spin_lock_irqsave(&zone->lock, flags);
 		tmp = (u64)pages_min * zone_managed_pages(zone);
 		do_div(tmp, lowmem_pages);
+		low = (u64)pages_low * zone_managed_pages(zone);
+		do_div(low, vm_total_pages);
 		if (is_highmem(zone)) {
 			/*
 			 * __GFP_HIGH and PF_MEMALLOC allocations usually don't
@@ -7825,8 +8156,10 @@ static void __setup_per_zone_wmarks(void)
 			    mult_frac(zone_managed_pages(zone),
 				      watermark_scale_factor, 10000));
 
-		zone->_watermark[WMARK_LOW]  = min_wmark_pages(zone) + tmp;
-		zone->_watermark[WMARK_HIGH] = min_wmark_pages(zone) + tmp * 2;
+		zone->_watermark[WMARK_LOW]  = min_wmark_pages(zone) +
+					low + tmp;
+		zone->_watermark[WMARK_HIGH] = min_wmark_pages(zone) +
+					low + tmp * 2;
 		zone->watermark_boost = 0;
 
 		spin_unlock_irqrestore(&zone->lock, flags);
@@ -7911,8 +8244,7 @@ postcore_initcall(init_per_zone_wmark_min)
 
 /*
  * min_free_kbytes_sysctl_handler - just a wrapper around proc_dointvec() so
- *	that we can call two helper functions whenever min_free_kbytes
- *	changes.
+ *	that we can call two helper functions whenever min_free_kbytes changes.
  */
 int min_free_kbytes_sysctl_handler(struct ctl_table *table, int write,
 	void __user *buffer, size_t *length, loff_t *ppos)
@@ -7927,6 +8259,25 @@ int min_free_kbytes_sysctl_handler(struct ctl_table *table, int write,
 		user_min_free_kbytes = min_free_kbytes;
 		setup_per_zone_wmarks();
 	}
+	return 0;
+}
+
+/*
+ * extra_free_kbytes_sysctl_handler - just a wrapper around proc_dointvec() so
+ * that we can call two helper functions whenever extra_free_kbytes changes.
+ */
+int extra_free_kbytes_sysctl_handler(struct ctl_table *table, int write,
+	void __user *buffer, size_t *length, loff_t *ppos)
+{
+	int rc;
+
+	rc = proc_dointvec_minmax(table, write, buffer, length, ppos);
+	if (rc)
+		return rc;
+
+	if (write)
+		setup_per_zone_wmarks();
+
 	return 0;
 }
 
@@ -8462,6 +8813,9 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 	if (ret < 0)
 		return ret;
 
+#ifdef CONFIG_CMA
+	cc.zone->cma_alloc = 1;
+#endif
 	/*
 	 * In case of -EBUSY, we'd like to know which page causes problem.
 	 * So, just fall through. test_pages_isolated() has a tracepoint
@@ -8543,8 +8897,12 @@ int alloc_contig_range(unsigned long start, unsigned long end,
 done:
 	undo_isolate_page_range(pfn_max_align_down(start),
 				pfn_max_align_up(end), migratetype);
+#ifdef CONFIG_CMA
+	cc.zone->cma_alloc = 0;
+#endif
 	return ret;
 }
+EXPORT_SYMBOL_GPL(alloc_contig_range);
 #endif /* CONFIG_CONTIG_ALLOC */
 
 void free_contig_range(unsigned long pfn, unsigned int nr_pages)
@@ -8559,6 +8917,7 @@ void free_contig_range(unsigned long pfn, unsigned int nr_pages)
 	}
 	WARN(count != 0, "%d pages are still in use!\n", count);
 }
+EXPORT_SYMBOL_GPL(free_contig_range);
 
 /*
  * The zone indicated has a new number of managed_pages; batch sizes and percpu
@@ -8703,6 +9062,41 @@ bool set_hwpoison_free_buddy_page(struct page *page)
 	return hwpoisoned;
 }
 #endif
+
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+void count_free_migrate(struct free_area *area, struct page *page,
+			struct list_head *list, int op)
+{
+	int page_mt = -1;
+	int list_mt = -1;
+
+	page_mt = get_pcppage_migratetype(page);
+	if (list)
+		list_mt = ((void *)list - (void *)area) / (sizeof(*list));
+
+	switch (op) {
+	case FREE_LIST_ADD:
+		WARN_ON(list_mt == -1);
+		set_pcppage_migratetype(page, list_mt);
+		area->free_mt[list_mt]++;
+		break;
+
+	case FREE_LIST_MOVE:
+		WARN_ON(list_mt == -1);
+		set_pcppage_migratetype(page, list_mt);
+		area->free_mt[list_mt]++;
+		area->free_mt[page_mt]--;
+		break;
+
+	case FREE_LIST_RM:
+		area->free_mt[page_mt]--;
+		break;
+
+	default:
+		break;
+	}
+}
+#endif /* CONFIG_AMLOGIC_MEMORY_EXTEND */
 
 #ifdef CONFIG_ZONE_DMA
 bool has_managed_dma(void)

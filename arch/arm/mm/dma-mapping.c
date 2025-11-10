@@ -37,6 +37,9 @@
 #include <asm/system_info.h>
 #include <asm/dma-contiguous.h>
 #include <xen/swiotlb-xen.h>
+#ifdef CONFIG_AMLOGIC_PCIE_DMA_OPS
+#include <linux/amlogic/dma_pcie_mapping.h>
+#endif
 
 #include "dma.h"
 #include "mm.h"
@@ -737,6 +740,10 @@ static void *__dma_alloc(struct device *dev, size_t size, dma_addr_t *handle,
 	allowblock = gfpflags_allow_blocking(gfp);
 	cma = allowblock ? dev_get_cma_area(dev) : false;
 
+	#ifdef CONFIG_AMLOGIC_CMA
+	if (!!(gfp & __GFP_NO_CMA))
+		cma = false;
+	#endif
 	if (cma)
 		buf->allocator = &cma_allocator;
 	else if (is_coherent)
@@ -922,6 +929,18 @@ static void dma_cache_maint_page(struct page *page, unsigned long offset,
 				}
 			}
 		} else {
+		/*
+		 * if the len cross the lowme/highmem zones
+		 * system will crash when do flush cache.
+		 */
+		#ifdef CONFIG_AMLOGIC_CMA
+			unsigned long tmp_pfn = pfn + (PAGE_ALIGN(len) >> PAGE_SHIFT);
+			struct page *tmp_page = pfn_to_page(tmp_pfn);
+
+			if (PageHighMem(tmp_page))
+				len = PAGE_SIZE - offset;
+		#endif
+
 			vaddr = page_address(page) + offset;
 			op(vaddr, len, dir);
 		}
@@ -2314,12 +2333,18 @@ void arch_setup_dma_ops(struct device *dev, u64 dma_base, u64 size,
 
 	set_dma_ops(dev, dma_ops);
 
+#ifdef CONFIG_AMLOGIC_PCIE_DMA_OPS
+	if (dev->bus && dev->bus->name && !strcmp(dev->bus->name, "pci"))
+		set_dma_ops(dev, &aml_pcie_dma_ops);
+#endif
+
 #ifdef CONFIG_XEN
 	if (xen_initial_domain())
 		dev->dma_ops = &xen_swiotlb_dma_ops;
 #endif
 	dev->archdata.dma_ops_setup = true;
 }
+EXPORT_SYMBOL_GPL(arch_setup_dma_ops);
 
 void arch_teardown_dma_ops(struct device *dev)
 {
@@ -2366,3 +2391,8 @@ void arch_dma_free(struct device *dev, size_t size, void *cpu_addr,
 	__arm_dma_free(dev, size, cpu_addr, dma_handle, attrs, false);
 }
 #endif /* CONFIG_SWIOTLB */
+
+void arch_dma_prep_coherent(struct page *page, size_t size)
+{
+	__dma_page_cpu_to_dev(page, 0, size, DMA_TO_DEVICE);
+}

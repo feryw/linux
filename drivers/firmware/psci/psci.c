@@ -27,6 +27,12 @@
 #include <asm/smp_plat.h>
 #include <asm/suspend.h>
 
+#ifdef CONFIG_AMLOGIC_CPUIDLE
+#include <linux/cpumask.h>
+#include <linux/amlogic/aml_cpuidle.h>
+#endif
+#include <trace/hooks/psci.h>
+
 /*
  * While a 64-bit OS can make calls with SMC32 calling conventions, for some
  * calls it is necessary to use SMC64 to pass or return 64-bit values.
@@ -49,6 +55,12 @@ static int resident_cpu = -1;
 
 bool psci_tos_resident_on(int cpu)
 {
+	bool resident = false;
+
+	trace_android_vh_psci_tos_resident_on(cpu, &resident);
+	if (resident)
+		return resident;
+
 	return cpu == resident_cpu;
 }
 
@@ -173,6 +185,16 @@ static int psci_cpu_suspend(u32 state, unsigned long entry_point)
 {
 	int err;
 	u32 fn;
+	bool deny = false;
+
+	trace_android_vh_psci_cpu_suspend(state, &deny);
+	if (deny)
+		return -EPERM;
+
+#ifdef CONFIG_AMLOGIC_CPUIDLE
+	if (is_aml_cpuidle_enabled())
+		arch_suspend_notifier(cpumask_of(0));
+#endif
 
 	fn = psci_function_id[PSCI_FN_CPU_SUSPEND];
 	err = invoke_psci_fn(fn, state, entry_point, 0);
@@ -247,7 +269,7 @@ static int get_set_conduit_method(struct device_node *np)
 {
 	const char *method;
 
-	pr_info("probing for conduit method from DT.\n");
+	pr_debug("probing for conduit method from DT.\n");
 
 	if (of_property_read_string(np, "method", &method)) {
 		pr_warn("missing \"method\" property\n");
@@ -265,7 +287,8 @@ static int get_set_conduit_method(struct device_node *np)
 	return 0;
 }
 
-static void psci_sys_reset(enum reboot_mode reboot_mode, const char *cmd)
+static int psci_sys_reset(struct notifier_block *nb, unsigned long action,
+			  void *data)
 {
 	if ((reboot_mode == REBOOT_WARM || reboot_mode == REBOOT_SOFT) &&
 	    psci_system_reset2_supported) {
@@ -278,7 +301,14 @@ static void psci_sys_reset(enum reboot_mode reboot_mode, const char *cmd)
 	} else {
 		invoke_psci_fn(PSCI_0_2_FN_SYSTEM_RESET, 0, 0, 0);
 	}
+
+	return NOTIFY_DONE;
 }
+
+static struct notifier_block psci_sys_reset_nb = {
+	.notifier_call = psci_sys_reset,
+	.priority = 129,
+};
 
 static void psci_sys_poweroff(void)
 {
@@ -371,7 +401,7 @@ static void __init psci_init_migrate(void)
 	type = psci_ops.migrate_info_type();
 
 	if (type == PSCI_0_2_TOS_MP) {
-		pr_info("Trusted OS migration not required\n");
+		pr_debug("Trusted OS migration not required\n");
 		return;
 	}
 
@@ -426,7 +456,7 @@ static void __init psci_init_smccc(void)
 
 static void __init psci_0_2_set_functions(void)
 {
-	pr_info("Using standard PSCI v0.2 function IDs\n");
+	pr_debug("Using standard PSCI v0.2 function IDs\n");
 	psci_ops.get_version = psci_get_version;
 
 	psci_function_id[PSCI_FN_CPU_SUSPEND] =
@@ -446,7 +476,7 @@ static void __init psci_0_2_set_functions(void)
 
 	psci_ops.migrate_info_type = psci_migrate_info_type;
 
-	arm_pm_restart = psci_sys_reset;
+	register_restart_handler(&psci_sys_reset_nb);
 
 	pm_power_off = psci_sys_poweroff;
 }
@@ -458,7 +488,7 @@ static int __init psci_probe(void)
 {
 	u32 ver = psci_get_version();
 
-	pr_info("PSCIv%d.%d detected in firmware.\n",
+	pr_debug("PSCIv%d.%d detected in firmware.\n",
 			PSCI_VERSION_MAJOR(ver),
 			PSCI_VERSION_MINOR(ver));
 

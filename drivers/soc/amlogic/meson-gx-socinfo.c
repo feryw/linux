@@ -1,10 +1,11 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (c) 2017 BayLibre, SAS
  * Author: Neil Armstrong <narmstrong@baylibre.com>
  *
- * SPDX-License-Identifier: GPL-2.0+
  */
 
+#include <linux/module.h>
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
@@ -40,6 +41,16 @@ static const struct meson_gx_soc_id {
 	{ "G12A", 0x28 },
 	{ "G12B", 0x29 },
 	{ "SM1", 0x2b },
+	{ "A1", 0x2c },
+	{ "TL1", 0x2e },
+	{ "TM2", 0x2f },
+	{ "C1", 0x30 },
+	{ "SC2", 0x32 },
+	{ "C2", 0x33 },
+	{ "T5", 0x34 },
+	{ "T5D", 0x35 },
+	{ "T7", 0x36 },
+	{ "S4", 0x37 },
 };
 
 static const struct meson_gx_package_id {
@@ -68,6 +79,11 @@ static const struct meson_gx_package_id {
 	{ "S922X", 0x29, 0x40, 0xf0 },
 	{ "A311D", 0x29, 0x10, 0xf0 },
 	{ "S905X3", 0x2b, 0x5, 0xf },
+	{ "A113L", 0x2c, 0x0, 0xf8 },
+	{ "T962E2", 0x2f, 0xc, 0xff },
+	{ "S905X4/C2", 0x32, 0x2, 0xff },
+	{ "T950D4", 0x35, 0x4, 0xff },
+	{ "A311D2", 0x36, 0x1, 0xff },
 };
 
 static inline unsigned int socinfo_to_major(u32 socinfo)
@@ -126,7 +142,6 @@ static int __init meson_gx_socinfo_init(void)
 	struct device_node *np;
 	struct regmap *regmap;
 	unsigned int socinfo;
-	struct device *dev;
 	int ret;
 
 	/* look up for chipid node */
@@ -189,15 +204,30 @@ static int __init meson_gx_socinfo_init(void)
 		kfree(soc_dev_attr);
 		return PTR_ERR(soc_dev);
 	}
-	dev = soc_device_to_device(soc_dev);
 
-	dev_info(dev, "Amlogic Meson %s Revision %x:%x (%x:%x) Detected\n",
-			soc_dev_attr->soc_id,
-			socinfo_to_major(socinfo),
-			socinfo_to_minor(socinfo),
-			socinfo_to_pack(socinfo),
-			socinfo_to_misc(socinfo));
+	pr_info("Amlogic Meson %s Revision %x:%x (%x:%x) Detected\n",
+		soc_dev_attr->soc_id,
+		socinfo_to_major(socinfo),
+		socinfo_to_minor(socinfo),
+		socinfo_to_pack(socinfo),
+		socinfo_to_misc(socinfo));
 
 	return 0;
 }
+
+#ifndef MODULE
 device_initcall(meson_gx_socinfo_init);
+#else
+static int __init meson_gx_socinfo_init_wrap(void)
+{
+	meson_gx_socinfo_init();
+
+	return 0;
+}
+static void __exit meson_gx_socinfo_exit(void)
+{
+}
+module_init(meson_gx_socinfo_init_wrap);
+module_exit(meson_gx_socinfo_exit);
+MODULE_LICENSE("GPL v2");
+#endif

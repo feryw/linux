@@ -273,6 +273,10 @@ static void alloc_init_cont_pmd(pud_t *pudp, unsigned long addr,
 static inline bool use_1G_block(unsigned long addr, unsigned long next,
 			unsigned long phys)
 {
+#ifdef CONFIG_AMLOGIC_CMA
+	/* we need create full 2nd page table */
+	return false;
+#else
 	if (PAGE_SHIFT != 12)
 		return false;
 
@@ -280,6 +284,7 @@ static inline bool use_1G_block(unsigned long addr, unsigned long next,
 		return false;
 
 	return true;
+#endif
 }
 
 static void alloc_init_pud(pgd_t *pgdp, unsigned long addr, unsigned long end,
@@ -463,7 +468,8 @@ static void __init map_mem(pgd_t *pgdp)
 	struct memblock_region *reg;
 	int flags = 0;
 
-	if (rodata_full || debug_pagealloc_enabled())
+	if (rodata_full || debug_pagealloc_enabled() ||
+	    IS_ENABLED(CONFIG_KFENCE))
 		flags = NO_BLOCK_MAPPINGS | NO_CONT_MAPPINGS;
 
 	/*
@@ -739,6 +745,28 @@ int __meminit vmemmap_populate(unsigned long start, unsigned long end, int node,
 	return vmemmap_populate_basepages(start, end, node);
 }
 #else	/* !ARM64_SWAPPER_USES_SECTION_MAPS */
+
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+static int __meminit check_pfn_overflow(unsigned long pfn)
+{
+	unsigned long pfn_up;
+	unsigned long size;
+	/*
+	 * reserve pfn is larger than max_pfn, we don't need to reserve memory
+	 * this can help for memory less than 1GB platform
+	 */
+	size = sizeof(struct page);
+	pfn_up = ALIGN(max_pfn * size, PMD_SIZE);
+	pfn_up = (pfn_up + size - 1) / size;	/* round up */
+	if (pfn >= pfn_up) {
+		pr_debug("%s, wrong pfn:%lx, max:%lx, up:%lx\n",
+			__func__, pfn, max_pfn, pfn_up);
+		return -ERANGE;
+	}
+	return 0;
+}
+#endif /* CONFIG_AMLOGIC_MEMORY_EXTEND */
+
 int __meminit vmemmap_populate(unsigned long start, unsigned long end, int node,
 		struct vmem_altmap *altmap)
 {
@@ -747,10 +775,24 @@ int __meminit vmemmap_populate(unsigned long start, unsigned long end, int node,
 	pgd_t *pgdp;
 	pud_t *pudp;
 	pmd_t *pmdp;
+#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+	struct page *page;
+	bool in_vmap = false;
+
+	page = (struct page *)start;
+	/* avoid check for KASAN */
+	if (start >= VMEMMAP_START)
+		in_vmap = true;
+#endif /* CONFIG_AMLOGIC_MEMORY_EXTEND */
 
 	do {
 		next = pmd_addr_end(addr, end);
 
+	#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+		/* page address may not just same as next */
+		while (in_vmap && ((unsigned long)page) < next)
+			page++;
+	#endif /* CONFIG_AMLOGIC_MEMORY_EXTEND */
 		pgdp = vmemmap_pgd_populate(addr, node);
 		if (!pgdp)
 			return -ENOMEM;
@@ -770,6 +812,10 @@ int __meminit vmemmap_populate(unsigned long start, unsigned long end, int node,
 			pmd_set_huge(pmdp, __pa(p), __pgprot(PROT_SECT_NORMAL));
 		} else
 			vmemmap_verify((pte_t *)pmdp, node, addr, next);
+		#ifdef CONFIG_AMLOGIC_MEMORY_EXTEND
+		if (in_vmap && check_pfn_overflow(page_to_pfn(page)))
+			break;
+		#endif /* CONFIG_AMLOGIC_MODIFY */
 	} while (addr = next, addr != end);
 
 	return 0;
@@ -1061,7 +1107,12 @@ int arch_add_memory(int nid, u64 start, u64 size,
 {
 	int flags = 0;
 
-	if (rodata_full || debug_pagealloc_enabled())
+	/*
+	 * KFENCE requires linear map to be mapped at page granularity, so that
+	 * it is possible to protect/unprotect single pages in the KFENCE pool.
+	 */
+	if (rodata_full || debug_pagealloc_enabled() ||
+	    IS_ENABLED(CONFIG_KFENCE))
 		flags = NO_BLOCK_MAPPINGS | NO_CONT_MAPPINGS;
 
 	__create_pgd_mapping(swapper_pg_dir, start, __phys_to_virt(start),

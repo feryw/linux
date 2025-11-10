@@ -395,6 +395,34 @@ static int of_thermal_get_crit_temp(struct thermal_zone_device *tz,
 	return -EINVAL;
 }
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+static int of_thermal_notify(struct thermal_zone_device *tz, int trip,
+			     enum thermal_trip_type type)
+{
+	struct thermal_instance *instance;
+	struct thermal_cooling_device *cdev;
+	int ret = 0;
+
+	if (type != THERMAL_TRIP_HOT)
+		return ret;
+
+	if (tz->temperature < 0)
+		return ret;
+
+	mutex_lock(&tz->lock);
+
+	list_for_each_entry(instance, &tz->thermal_instances, tz_node) {
+		cdev = instance->cdev;
+		if (cdev->ops && cdev->ops->notify_state && trip == instance->trip)
+			ret += cdev->ops->notify_state(instance, trip, type);
+	}
+
+	mutex_unlock(&tz->lock);
+
+	return ret;
+}
+#endif
+
 static struct thermal_zone_device_ops of_thermal_ops = {
 	.get_mode = of_thermal_get_mode,
 	.set_mode = of_thermal_set_mode,
@@ -408,6 +436,9 @@ static struct thermal_zone_device_ops of_thermal_ops = {
 
 	.bind = of_thermal_bind,
 	.unbind = of_thermal_unbind,
+#ifdef CONFIG_AMLOGIC_MODIFY
+	.notify = of_thermal_notify,
+#endif
 };
 
 /***   sensor API   ***/

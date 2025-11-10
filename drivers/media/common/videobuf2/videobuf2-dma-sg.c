@@ -51,6 +51,9 @@ struct vb2_dma_sg_buf {
 	struct vb2_vmarea_handler	handler;
 
 	struct dma_buf_attachment	*db_attach;
+#ifdef CONFIG_AMLOGIC_MODIFY
+	int				order_max;
+#endif
 };
 
 static void vb2_dma_sg_put(void *buf_priv);
@@ -71,6 +74,11 @@ static int vb2_dma_sg_alloc_compacted(struct vb2_dma_sg_buf *buf,
 		if ((PAGE_SIZE << order) > size)
 			order--;
 
+#ifdef CONFIG_AMLOGIC_MODIFY
+		if (buf->order_max != -1 &&
+			order > buf->order_max)
+			order = buf->order_max;
+#endif
 		pages = NULL;
 		while (!pages) {
 			pages = alloc_pages(GFP_KERNEL | __GFP_ZERO |
@@ -104,6 +112,9 @@ static void *vb2_dma_sg_alloc(struct device *dev, unsigned long dma_attrs,
 	struct sg_table *sgt;
 	int ret;
 	int num_pages;
+#ifdef CONFIG_AMLOGIC_MODIFY
+	ulong totalram = totalram_pages() << PAGE_SHIFT;
+#endif
 
 	if (WARN_ON(!dev))
 		return ERR_PTR(-EINVAL);
@@ -146,6 +157,13 @@ static void *vb2_dma_sg_alloc(struct device *dev, unsigned long dma_attrs,
 				      buf->dma_dir, DMA_ATTR_SKIP_CPU_SYNC);
 	if (!sgt->nents)
 		goto fail_map;
+
+#ifdef CONFIG_AMLOGIC_MODIFY
+	buf->order_max = (totalram <= SZ_1G) ? 0 :
+			 (totalram <= SZ_2G) ? 3 : -1;
+	dprintk(1, "%s: Allocate max buffer order:%d\n",
+		__func__, buf->order_max);
+#endif
 
 	buf->handler.refcount = &buf->refcount;
 	buf->handler.put = vb2_dma_sg_put;
