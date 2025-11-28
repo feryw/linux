@@ -1699,12 +1699,12 @@ static int sta_apply_parameters(struct ieee80211_local *local,
 		sta->listen_interval = params->listen_interval;
 
 	if (params->link_sta_params.supported_rates &&
-	    params->link_sta_params.supported_rates_len) {
-		ieee80211_parse_bitrates(&sdata->vif.bss_conf.chandef,
-					 sband, params->link_sta_params.supported_rates,
-					 params->link_sta_params.supported_rates_len,
-					 &sta->sta.deflink.supp_rates[sband->band]);
-	}
+	    params->link_sta_params.supported_rates_len &&
+	    !ieee80211_parse_bitrates(&sdata->vif.bss_conf.chandef,
+				      sband, params->link_sta_params.supported_rates,
+				      params->link_sta_params.supported_rates_len,
+				      &sta->sta.deflink.supp_rates[sband->band]))
+	    return -EINVAL;
 
 	if (params->link_sta_params.ht_capa)
 		ieee80211_ht_cap_ie_to_sta_ht_cap(sdata, sband,
@@ -2798,7 +2798,8 @@ static int ieee80211_get_tx_power(struct wiphy *wiphy,
 	struct ieee80211_local *local = wiphy_priv(wiphy);
 	struct ieee80211_sub_if_data *sdata = IEEE80211_WDEV_TO_SUB_IF(wdev);
 
-	if (local->ops->get_txpower)
+	if (local->ops->get_txpower &&
+	    (sdata->flags & IEEE80211_SDATA_IN_DRIVER))
 		return drv_get_txpower(local, sdata, dbm);
 
 	if (!local->use_chanctx)

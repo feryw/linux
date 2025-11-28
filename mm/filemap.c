@@ -1945,6 +1945,8 @@ no_page:
 		if (fgp_flags & FGP_NOFS)
 			gfp_mask &= ~__GFP_FS;
 
+		trace_android_vh_pagecache_get_page_gfp(mapping, fgp_flags, &gfp_mask);
+
 		page = __page_cache_alloc(gfp_mask);
 		if (!page)
 			return NULL;
@@ -2626,7 +2628,7 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 	if (unlikely(!iov_iter_count(iter)))
 		return 0;
 
-	iov_iter_truncate(iter, inode->i_sb->s_maxbytes);
+	iov_iter_truncate(iter, inode->i_sb->s_maxbytes - iocb->ki_pos);
 	pagevec_init(&pvec);
 
 	do {
@@ -2827,7 +2829,7 @@ static inline loff_t page_seek_hole_data(struct xa_state *xas,
 	do {
 		if (ops->is_partially_uptodate(page, offset, bsz) == seek_data)
 			break;
-		start = (start + bsz) & ~(bsz - 1);
+		start = (start + bsz) & ~((u64)bsz - 1);
 		offset += bsz;
 	} while (offset < thp_size(page));
 unlock:
@@ -3472,7 +3474,7 @@ int generic_file_mmap(struct file *file, struct vm_area_struct *vma)
  */
 int generic_file_readonly_mmap(struct file *file, struct vm_area_struct *vma)
 {
-	if ((vma->vm_flags & VM_SHARED) && (vma->vm_flags & VM_MAYWRITE))
+	if (vma_is_shared_maywrite(vma))
 		return -EINVAL;
 	return generic_file_mmap(file, vma);
 }
