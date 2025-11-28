@@ -1,0 +1,3 @@
+[submodule "common_drivers"]
+        url = https://github.com/CoreELEC/common_drivers
+        active = true  
