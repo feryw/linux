@@ -29,6 +29,8 @@
 #include <linux/amlogic/cpu_version.h>
 #endif
 
+extern const char *machine_name;
+
 /*
  * In case the boot CPU is hotpluggable, we record its initial state and
  * current state separately. Certain system registers may contain different
