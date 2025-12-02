@@ -235,9 +235,16 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 	 * but for now enforcing a simple global ordering is fine.
 	 */
 	lockdep_assert_held(&iommu_probe_device_lock);
+
+	/* Device is probed already if in a group */
+	if (dev->iommu_group) {
+		ret = 0;
+		goto out_unlock;
+	}
+
 	if (!dev_iommu_get(dev)) {
 		ret = -ENOMEM;
-		goto err_out;
+		goto out_unlock;
 	}
 
 	if (!try_module_get(ops->owner)) {
@@ -278,7 +285,7 @@ out_module_put:
 err_free:
 	dev_iommu_free(dev);
 
-err_out:
+out_unlock:
 	return ret;
 }
 
@@ -1641,15 +1648,7 @@ struct iommu_domain *iommu_group_default_domain(struct iommu_group *group)
 static int probe_iommu_group(struct device *dev, void *data)
 {
 	struct list_head *group_list = data;
-	struct iommu_group *group;
 	int ret;
-
-	/* Device is probed already if in a group */
-	group = iommu_group_get(dev);
-	if (group) {
-		iommu_group_put(group);
-		return 0;
-	}
 
 	mutex_lock(&iommu_probe_device_lock);
 	ret = __iommu_probe_device(dev, group_list);
@@ -1751,6 +1750,9 @@ static void probe_alloc_default_domain(struct bus_type *bus,
 				       struct iommu_group *group)
 {
 	struct __group_domain_type gtype;
+
+	if (group->default_domain)
+		return;
 
 	memset(&gtype, 0, sizeof(gtype));
 
@@ -2429,6 +2431,7 @@ static size_t iommu_pgsize(struct iommu_domain *domain, unsigned long iova,
 	unsigned int pgsize_idx, pgsize_idx_next;
 	unsigned long pgsizes;
 	size_t offset, pgsize, pgsize_next;
+	size_t offset_end;
 	unsigned long addr_merge = paddr | iova;
 
 	/* Page sizes supported by the hardware and small enough for @size */
@@ -2469,7 +2472,8 @@ static size_t iommu_pgsize(struct iommu_domain *domain, unsigned long iova,
 	 * If size is big enough to accommodate the larger page, reduce
 	 * the number of smaller pages.
 	 */
-	if (offset + pgsize_next <= size)
+	if (!check_add_overflow(offset, pgsize_next, &offset_end) &&
+	    offset_end <= size)
 		size = offset;
 
 out_set_count:

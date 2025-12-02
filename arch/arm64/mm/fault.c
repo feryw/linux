@@ -801,6 +801,11 @@ static int do_sea(unsigned long far, unsigned int esr, struct pt_regs *regs)
 {
 	const struct fault_info *inf;
 	unsigned long siaddr;
+	bool can_fixup = false;
+
+	trace_android_vh_try_fixup_sea(far, esr, regs, &can_fixup);
+	if (can_fixup && fixup_exception(regs))
+		return 0;
 
 	inf = esr_to_fault_info(esr);
 
@@ -822,6 +827,7 @@ static int do_sea(unsigned long far, unsigned int esr, struct pt_regs *regs)
 		 */
 		siaddr  = untagged_addr(far);
 	}
+	add_taint(TAINT_MACHINE_CHECK, LOCKDEP_STILL_OK);
 	trace_android_rvh_do_sea(siaddr, esr, regs);
 	arm64_notify_die(inf->name, regs, inf->sig, inf->code, siaddr, esr);
 
