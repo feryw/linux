@@ -142,7 +142,7 @@ static int i2c_master_reg8_recv(const struct i2c_client *client,
 	return (ret == 2) ? count : ret;
 }
 
-static int mcu_i2c_read_regs(struct i2c_client *client,
+static __maybe_unused int mcu_i2c_read_regs(struct i2c_client *client,
 		char reg, char buf[], unsigned int len)
 {
 	int ret;

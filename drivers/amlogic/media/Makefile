@@ -4,7 +4,7 @@ $(MEDIA_MODULE_NAME)-y = media_main.o
 
 include drivers/amlogic/media/common/Makefile
 
-include drivers/amlogic/media/video_sink/Makefile
+# include drivers/amlogic/media/video_sink/Makefile
 
 include drivers/amlogic/media/osd/Makefile
 

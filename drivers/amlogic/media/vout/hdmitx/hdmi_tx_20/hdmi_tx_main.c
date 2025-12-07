@@ -6991,7 +6991,7 @@ static void hdmitx_fmt_attr(struct hdmitx_dev *hdev)
 	pr_info(SYS "fmt_attr %s\n", hdev->fmt_attr);
 }
 
-static void hdmitx_init_fmt_attr(struct hdmitx_dev *hdev)
+static __maybe_unused void hdmitx_init_fmt_attr(struct hdmitx_dev *hdev)
 {
 	if (strlen(hdev->fmt_attr) >= 8) {
 		pr_info(SYS "fmt_attr %s\n", hdev->fmt_attr);
@@ -7367,7 +7367,7 @@ static int amhdmitx_get_dt_info(struct platform_device *pdev)
 			while ((i * 2) < strlen(custom_edid)) {
 				if (i == sizeof(hdev->custom_EDID_buf))
 					break;
-				sscanf(custom_edid + i * 2, "%02x", &hdev->custom_EDID_buf[i]);
+				sscanf(custom_edid + i * 2, "%02hhx", &hdev->custom_EDID_buf[i]);
 				i++;
 			}
 			if (hdmitx_edid_check_valid_blocks(hdev->custom_EDID_buf))
@@ -8027,14 +8027,14 @@ static int hdmitx_boot_frac_rate(char *str)
 
 __setup("frac_rate_policy=", hdmitx_boot_frac_rate);
 
-static int hdmitx_boot_hdr_priority(char *str)
+static __maybe_unused int hdmitx_boot_hdr_priority(char *str)
 {
 	long int val = 0;
 	int ret;
 
 	if ((ret = kstrtol(str, 10, &val)) == 0) {
 		hdmitx_device.hdr_priority = val;
-		pr_info("hdmitx boot hdr_priority: %d\n", val);
+		pr_info("hdmitx boot hdr_priority: %ld\n", val);
 	}
 	return ret;
 }

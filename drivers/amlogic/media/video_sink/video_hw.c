@@ -295,7 +295,7 @@ static struct vpu_dev_s *vpu_prime_dolby_ram;
 		vd_layer[0].enabled = 1; \
 		vd_layer[0].enabled_status_saved = 1; \
 		vd_layer[0].capture_frame_req = NULL; \
-		atomic_set(&vd_layer[0].capture_use_cnt, CAPTURE_STATE_ON); \
+		// atomic_set(&vd_layer[0].capture_use_cnt, CAPTURE_STATE_ON); \
 		spin_unlock_irqrestore(&video_onoff_lock, flags); \
 	} while (0)
 
@@ -306,7 +306,7 @@ static struct vpu_dev_s *vpu_prime_dolby_ram;
 		vd_layer[0].onoff_state = VIDEO_ENABLE_STATE_OFF_REQ; \
 		vd_layer[0].enabled = 0; \
 		vd_layer[0].enabled_status_saved = 0; \
-		atomic_set(&vd_layer[0].capture_use_cnt, CAPTURE_STATE_OFF); \
+		// atomic_set(&vd_layer[0].capture_use_cnt, CAPTURE_STATE_OFF); \
 		if (vd_layer[0].capture_frame_req && vd_layer[0].capture_frame_req->data) { \
 			struct amvideocap_req_data *reqdata = \
 				(struct amvideocap_req_data *)vd_layer[0].capture_frame_req->data; \
@@ -592,7 +592,7 @@ static void disable_video_layer_s5(u32 layer_id, u32 async)
 		pr_info("VIDEO(%d): DisableVideoLayer()\n", layer_id);
 }
 
-static void disable_video_all_layer_nodelay_s5(void)
+static __maybe_unused void disable_video_all_layer_nodelay_s5(void)
 {
 	int i = 0;
 	struct video_layer_s *layer = NULL;
@@ -834,7 +834,7 @@ bool is_dovi_tv_on(void)
 #endif
 }
 
-struct video_dev_s *get_video_cur_dev(void)
+struct __maybe_unused video_dev_s * get_video_cur_dev(void)
 {
 	return cur_dev;
 }
@@ -967,7 +967,7 @@ struct video_layer_s *get_vd_layer(u8 layer_id)
 	return layer;
 }
 
-void update_vd_src_info(u8 layer_id,
+void __maybe_unused update_vd_src_info(u8 layer_id,
 							u32 src_width, u32 src_height,
 							u32 compWidth, u32 compHeight)
 {

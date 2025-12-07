@@ -12,6 +12,7 @@ void am_meson_vpu_exit(void);
 #else
 static inline int am_meson_vpu_init(void)
 {
+	return 0;
 }
 
 static inline void am_meson_vpu_exit(void) {}
