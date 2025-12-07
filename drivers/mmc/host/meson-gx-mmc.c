@@ -84,6 +84,47 @@ static inline u32 aml_mv_dly2_nocmd(u32 x)
 	return (x) | ((x) << 6) | ((x) << 12);
 }
 
+	struct pinctrl *pinctrl;
+	struct pinctrl_state *pins_default;
+	struct pinctrl_state *pins_clk_gate;
+
+	unsigned int bounce_buf_size;
+	void *bounce_buf;
+	void __iomem *bounce_iomem_buf;
+	dma_addr_t bounce_dma_addr;
+	struct sd_emmc_desc *descs;
+	dma_addr_t descs_dma_addr;
+
+	int irq;
+
+	bool vqmmc_enabled;
+	bool needs_pre_post_req;
+
+};
+
+#define CMD_CFG_LENGTH_MASK GENMASK(8, 0)
+#define CMD_CFG_BLOCK_MODE BIT(9)
+#define CMD_CFG_R1B BIT(10)
+#define CMD_CFG_END_OF_CHAIN BIT(11)
+#define CMD_CFG_TIMEOUT_MASK GENMASK(15, 12)
+#define CMD_CFG_NO_RESP BIT(16)
+#define CMD_CFG_NO_CMD BIT(17)
+#define CMD_CFG_DATA_IO BIT(18)
+#define CMD_CFG_DATA_WR BIT(19)
+#define CMD_CFG_RESP_NOCRC BIT(20)
+#define CMD_CFG_RESP_128 BIT(21)
+#define CMD_CFG_RESP_NUM BIT(22)
+#define CMD_CFG_DATA_NUM BIT(23)
+#define CMD_CFG_CMD_INDEX_MASK GENMASK(29, 24)
+#define CMD_CFG_ERROR BIT(30)
+#define CMD_CFG_OWNER BIT(31)
+
+#define CMD_DATA_MASK GENMASK(31, 2)
+#define CMD_DATA_BIG_ENDIAN BIT(1)
+#define CMD_DATA_SRAM BIT(0)
+#define CMD_RESP_MASK GENMASK(31, 1)
+#define CMD_RESP_SRAM BIT(0)
+
 static unsigned int meson_mmc_get_timeout_msecs(struct mmc_data *data)
 {
 	unsigned int timeout = data->timeout_ns / NSEC_PER_MSEC;
@@ -1726,6 +1767,19 @@ static void meson_mmc_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	host->needs_pre_post_req = mrq->data &&
 			!(mrq->data->host_cookie & SD_EMMC_PRE_REQ_DONE);
 
+	/*
+	 * The memory at the end of the controller used as bounce buffer for
+	 * the dram_access_quirk only accepts 32bit read/write access,
+	 * check the aligment and length of the data before starting the request.
+	 */
+	if (host->dram_access_quirk && mrq->data) {
+		mrq->cmd->error = meson_mmc_validate_dram_access(mmc, mrq->data);
+		if (mrq->cmd->error) {
+			mmc_request_done(mmc, mrq);
+			return;
+		}
+	}
+
 	if (host->needs_pre_post_req) {
 		meson_mmc_get_transfer_mode(mmc, mrq);
 		if (!meson_mmc_desc_chain_mode(mrq->data))
@@ -2659,6 +2713,7 @@ static void aml_sd_emmc_enable_sdio_irq(struct mmc_host *mmc, int enable)
 
 	/* check if irq already occurred */
 	aml_sd_emmc_check_sdio_irq(host);
+	meson_mmc_start_cmd(mmc, mrq->sbc ?: mrq->cmd);
 }
 
 static void meson_mmc_read_resp(struct mmc_host *mmc, struct mmc_command *cmd)
@@ -2836,6 +2891,8 @@ static irqreturn_t meson_mmc_irq(int irq, void *dev_id)
 			ret = IRQ_WAKE_THREAD;
 		else
 			ret = IRQ_HANDLED;
+
+		return IRQ_WAKE_THREAD;
 	}
 
 out:
@@ -3980,6 +4037,9 @@ static int meson_mmc_probe(struct platform_device *pdev)
 
 	mmc->ops = &meson_mmc_ops;
 	amlogic_add_host(host);
+	ret = mmc_add_host(mmc);
+	if (ret)
+		goto err_free_irq;
 
 	if (aml_card_type_non_sdio(host) && host->sd_uart_init) {
 		struct mmc_gpio *ctx = mmc->slot.handler_priv;

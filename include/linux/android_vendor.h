@@ -30,6 +30,7 @@
 #define ANDROID_VENDOR_DATA(n)
 #define ANDROID_VENDOR_DATA_ARRAY(n, s)
 #else
+#ifdef CONFIG_ANDROID_VENDOR_OEM_DATA
 #define ANDROID_VENDOR_DATA(n)		u64 android_vendor_data##n
 #define ANDROID_VENDOR_DATA_ARRAY(n, s)	u64 android_vendor_data##n[s]
 #endif /* CONFIG_AMLOGIC_MODIFY */
@@ -37,5 +38,12 @@
 
 #define ANDROID_OEM_DATA(n)		u64 android_oem_data##n
 #define ANDROID_OEM_DATA_ARRAY(n, s)	u64 android_oem_data##n[s]
+#else
+#define ANDROID_VENDOR_DATA(n)
+#define ANDROID_VENDOR_DATA_ARRAY(n, s)
+#define ANDROID_OEM_DATA(n)
+#define ANDROID_OEM_DATA_ARRAY(n, s)
+
+#endif
 
 #endif /* _ANDROID_VENDOR_H */

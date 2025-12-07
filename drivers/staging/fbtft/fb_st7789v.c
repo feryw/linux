@@ -89,6 +89,11 @@ static int init_display(struct fbtft_par *par)
 	write_reg(par, 0xc4, 0x20);
 	write_reg(par, 0xc6, 0x0f);
 	write_reg(par, 0xd0, 0xa4, 0xa1);
+	par->fbtftops.reset(par);
+
+	/* turn off sleep mode */
+	write_reg(par, MIPI_DCS_EXIT_SLEEP_MODE);
+	mdelay(120);
 
        /* gamma setting */
 	write_reg(par, 0xe0, 0xd0, 0x04, 0x0d, 0x11, 0x13,

@@ -442,9 +442,20 @@ static int fw_decompress_xz(struct device *dev, struct fw_priv *fw_priv,
 #endif /* CONFIG_FW_LOADER_COMPRESS */
 
 /* direct firmware loading support */
-static char fw_path_para[256];
+#define CUSTOM_FW_PATH_COUNT	10
+#define PATH_SIZE		255
+static char fw_path_para[CUSTOM_FW_PATH_COUNT][PATH_SIZE];
 static const char * const fw_path[] = {
-	fw_path_para,
+	fw_path_para[0],
+	fw_path_para[1],
+	fw_path_para[2],
+	fw_path_para[3],
+	fw_path_para[4],
+	fw_path_para[5],
+	fw_path_para[6],
+	fw_path_para[7],
+	fw_path_para[8],
+	fw_path_para[9],
 	"/lib/firmware/updates/" UTS_RELEASE,
 	"/lib/firmware/updates",
 	"/lib/firmware/" UTS_RELEASE,
@@ -456,12 +467,51 @@ static const char * const fw_path[] = {
 	"/vendor/firmware"
 };
 
+static char strpath[PATH_SIZE * CUSTOM_FW_PATH_COUNT];
+static int firmware_param_path_set(const char *val, const struct kernel_param *kp)
+{
+	int i;
+	char *path, *end;
+
+	strscpy(strpath, val, sizeof(strpath));
+	/* Remove leading and trailing spaces from path */
+	path = strim(strpath);
+	for (i = 0; path && i < CUSTOM_FW_PATH_COUNT; i++) {
+		end = strchr(path, ',');
+
+		/* Skip continuous token case, for example ',,,' */
+		if (end == path) {
+			i--;
+			path = ++end;
+			continue;
+		}
+
+		if (end != NULL)
+			*end = '\0';
+		else {
+			/* end of the string reached and no other tockens ','  */
+			strscpy(fw_path_para[i], path, PATH_SIZE);
+			break;
+		}
+
+		strscpy(fw_path_para[i], path, PATH_SIZE);
+		path = ++end;
+	}
+
+	return 0;
+}
+
 /*
- * Typical usage is that passing 'firmware_class.path=$CUSTOMIZED_PATH'
+ * Typical usage is that passing 'firmware_class.path=/vendor,/firwmare_mnt'
  * from kernel command line because firmware_class is generally built in
- * kernel instead of module.
+ * kernel instead of module. ',' is used as delimiter for setting 10
+ * custom paths for firmware loader.
  */
-module_param_string(path, fw_path_para, sizeof(fw_path_para), 0644);
+
+static const struct kernel_param_ops firmware_param_ops = {
+	.set = firmware_param_path_set,
+};
+module_param_cb(path, &firmware_param_ops, NULL, 0200);
 MODULE_PARM_DESC(path, "customized firmware image search path with a higher priority than default path");
 
 static int
@@ -759,6 +809,26 @@ static void fw_abort_batch_reqs(struct firmware *fw)
 	mutex_unlock(&fw_lock);
 }
 
+/*
+ * Reject firmware file names with ".." path components.
+ * There are drivers that construct firmware file names from device-supplied
+ * strings, and we don't want some device to be able to tell us "I would like to
+ * be sent my firmware from ../../../etc/shadow, please".
+ *
+ * Search for ".." surrounded by either '/' or start/end of string.
+ *
+ * This intentionally only looks at the firmware name, not at the firmware base
+ * directory or at symlink contents.
+ */
+static bool name_contains_dotdot(const char *name)
+{
+	size_t name_len = strlen(name);
+
+	return strcmp(name, "..") == 0 || strncmp(name, "../", 3) == 0 ||
+	       strstr(name, "/../") != NULL ||
+	       (name_len >= 3 && strcmp(name+name_len-3, "/..") == 0);
+}
+
 /* called from request_firmware() and request_firmware_work_func() */
 static int
 _request_firmware(const struct firmware **firmware_p, const char *name,
@@ -766,6 +836,8 @@ _request_firmware(const struct firmware **firmware_p, const char *name,
 		  enum fw_opt opt_flags)
 {
 	struct firmware *fw = NULL;
+	struct cred *kern_cred = NULL;
+	const struct cred *old_cred;
 	int ret;
 
 	if (!firmware_p)
@@ -776,10 +848,30 @@ _request_firmware(const struct firmware **firmware_p, const char *name,
 		goto out;
 	}
 
+	if (name_contains_dotdot(name)) {
+		dev_warn(device,
+			 "Firmware load for '%s' refused, path contains '..' component\n",
+			 name);
+		ret = -EINVAL;
+		goto out;
+	}
+
 	ret = _request_firmware_prepare(&fw, name, device, buf, size,
 					opt_flags);
 	if (ret <= 0) /* error or already assigned */
 		goto out;
+
+	/*
+	 * We are about to try to access the firmware file. Because we may have been
+	 * called by a driver when serving an unrelated request from userland, we use
+	 * the kernel credentials to read the file.
+	 */
+	kern_cred = prepare_kernel_cred(NULL);
+	if (!kern_cred) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	old_cred = override_creds(kern_cred);
 
 	ret = fw_get_filesystem_firmware(device, fw->priv, "", NULL);
 #ifdef CONFIG_FW_LOADER_COMPRESS
@@ -796,6 +888,9 @@ _request_firmware(const struct firmware **firmware_p, const char *name,
 		ret = firmware_fallback_sysfs(fw, name, device, opt_flags, ret);
 	} else
 		ret = assign_fw(fw, device, opt_flags);
+
+	revert_creds(old_cred);
+	put_cred(kern_cred);
 
  out:
 	if (ret < 0) {
@@ -822,6 +917,8 @@ _request_firmware(const struct firmware **firmware_p, const char *name,
  *      @name will be used as $FIRMWARE in the uevent environment and
  *      should be distinctive enough not to be confused with any other
  *      firmware image for this or any other device.
+ *	It must not contain any ".." path components - "foo/bar..bin" is
+ *	allowed, but "foo/../bar.bin" is not.
  *
  *	Caller must hold the reference count of @device.
  *

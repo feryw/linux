@@ -9,6 +9,7 @@
 #include <linux/ptrace.h>
 #include <linux/slab.h>
 #include <linux/pagemap.h>
+#include <linux/pgsize_migration.h>
 #include <linux/mempolicy.h>
 #include <linux/rmap.h>
 #include <linux/swap.h>
@@ -368,7 +369,7 @@ show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
 	}
 
 	start = vma->vm_start;
-	end = vma->vm_end;
+	end = VMA_PAD_START(vma);
 	show_vma_header_prefix(m, start, end, flags, pgoff, dev, ino);
 
 	/*
@@ -421,7 +422,13 @@ done:
 
 static int show_map(struct seq_file *m, void *v)
 {
-	show_map_vma(m, v);
+	struct vm_area_struct *vma = v;
+
+	if (vma_pages(vma))
+		show_map_vma(m, vma);
+
+	show_map_pad_vma(vma, m, show_map_vma, false);
+
 	m_cache_vma(m, v);
 	return 0;
 }
@@ -785,9 +792,7 @@ static int smaps_hugetlb_range(pte_t *pte, unsigned long hmask,
 			page = device_private_entry_to_page(swpent);
 	}
 	if (page) {
-		int mapcount = page_mapcount(page);
-
-		if (mapcount >= 2)
+		if (page_mapcount(page) >= 2 || hugetlb_pmd_shared(pte))
 			mss->shared_hugetlb += huge_page_size(hstate_vma(vma));
 		else
 			mss->private_hugetlb += huge_page_size(hstate_vma(vma));
@@ -812,6 +817,8 @@ static const struct mm_walk_ops smaps_shmem_walk_ops = {
 static void smap_gather_stats(struct vm_area_struct *vma,
 			     struct mem_size_stats *mss)
 {
+	unsigned long end = VMA_PAD_START(vma);
+
 #ifdef CONFIG_SHMEM
 	/* In case of smaps_rollup, reset the value from previous vma */
 	mss->check_shmem_swap = false;
@@ -828,18 +835,27 @@ static void smap_gather_stats(struct vm_area_struct *vma,
 		 */
 		unsigned long shmem_swapped = shmem_swap_usage(vma);
 
-		if (!shmem_swapped || (vma->vm_flags & VM_SHARED) ||
-					!(vma->vm_flags & VM_WRITE)) {
+		if ((!shmem_swapped || (vma->vm_flags & VM_SHARED) ||
+					!(vma->vm_flags & VM_WRITE)) &&
+					/*
+					 * Only if we don't have padding can we use the fast path
+					 * shmem_inode_info->swapped for shmem_swapped.
+					 *
+					 * Else we'll walk the page table to calculate
+					 * shmem_swapped, (excluding the padding region).
+					 */
+					end == vma->vm_end) {
 			mss->swap += shmem_swapped;
 		} else {
 			mss->check_shmem_swap = true;
-			walk_page_vma(vma, &smaps_shmem_walk_ops, mss);
+			walk_page_range(vma->vm_mm, vma->vm_start, end,
+					&smaps_shmem_walk_ops, mss);
 			return;
 		}
 	}
 #endif
 	/* mmap_sem is held in m_start */
-	walk_page_vma(vma, &smaps_walk_ops, mss);
+	walk_page_range(vma->vm_mm, vma->vm_start, end, &smaps_walk_ops, mss);
 }
 
 #define SEQ_PUT_DEC(str, val) \
@@ -884,7 +900,7 @@ static void __show_smap(struct seq_file *m, const struct mem_size_stats *mss,
 	seq_puts(m, " kB\n");
 }
 
-static int show_smap(struct seq_file *m, void *v)
+static void show_smap_vma(struct seq_file *m, void *v)
 {
 	struct vm_area_struct *vma = v;
 	struct mem_size_stats mss;
@@ -900,7 +916,7 @@ static int show_smap(struct seq_file *m, void *v)
 		seq_putc(m, '\n');
 	}
 
-	SEQ_PUT_DEC("Size:           ", vma->vm_end - vma->vm_start);
+	SEQ_PUT_DEC("Size:           ", VMA_PAD_START(vma) - vma->vm_start);
 	SEQ_PUT_DEC(" kB\nKernelPageSize: ", vma_kernel_pagesize(vma));
 	SEQ_PUT_DEC(" kB\nMMUPageSize:    ", vma_mmu_pagesize(vma));
 	seq_puts(m, " kB\n");
@@ -913,9 +929,18 @@ static int show_smap(struct seq_file *m, void *v)
 	if (arch_pkeys_enabled())
 		seq_printf(m, "ProtectionKey:  %8u\n", vma_pkey(vma));
 	show_smap_vma_flags(m, vma);
+}
 
-	m_cache_vma(m, vma);
+static int show_smap(struct seq_file *m, void *v)
+{
+	struct vm_area_struct *vma = v;
 
+	if (vma_pages(vma))
+		show_smap_vma(m, vma);
+
+	show_map_pad_vma(vma, m, show_smap_vma, true);
+
+	m_cache_vma(m, v);
 	return 0;
 }
 
@@ -951,7 +976,7 @@ static int show_smaps_rollup(struct seq_file *m, void *v)
 		last_vma_end = vma->vm_end;
 	}
 
-	show_vma_header_prefix(m, priv->mm->mmap->vm_start,
+	show_vma_header_prefix(m, priv->mm->mmap ? priv->mm->mmap->vm_start : 0,
 			       last_vma_end, 0, 0, 0, 0);
 	seq_pad(m, ' ');
 	seq_puts(m, "[rollup]\n");

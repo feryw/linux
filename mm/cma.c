@@ -50,6 +50,7 @@
 
 struct cma cma_areas[MAX_CMA_AREAS];
 unsigned cma_area_count;
+static DEFINE_MUTEX(cma_mutex);
 
 #ifdef CONFIG_AMLOGIC_CMA
 static DEFINE_MUTEX(cma_mutex);
@@ -731,10 +732,10 @@ struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
 #else
 		ret = aml_cma_alloc_range(pfn, pfn + count);
 #endif
-		mutex_unlock(&cma_mutex);
-#else
+		mutex_lock(&cma_mutex);
 		ret = alloc_contig_range(pfn, pfn + count, MIGRATE_CMA,
 				     GFP_KERNEL | (no_warn ? __GFP_NOWARN : 0));
+		mutex_unlock(&cma_mutex);
 	#endif /* CONFIG_AMLOGIC_CMA */
 		if (ret == 0) {
 			page = pfn_to_page(pfn);
@@ -769,7 +770,7 @@ struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
 	 */
 	if (page) {
 		for (i = 0; i < count; i++)
-			page_kasan_tag_reset(page + i);
+			page_kasan_tag_reset(nth_page(page, i));
 	}
 
 	if (ret && !no_warn) {

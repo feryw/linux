@@ -354,16 +354,19 @@ void f2fs_drop_inmem_page(struct inode *inode, struct page *page)
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
 	struct list_head *head = &fi->inmem_pages;
 	struct inmem_pages *cur = NULL;
+	struct inmem_pages *tmp;
 
 	f2fs_bug_on(sbi, !page_private_atomic(page));
 
 	mutex_lock(&fi->inmem_lock);
-	list_for_each_entry(cur, head, list) {
-		if (cur->page == page)
+	list_for_each_entry(tmp, head, list) {
+		if (tmp->page == page) {
+			cur = tmp;
 			break;
+		}
 	}
 
-	f2fs_bug_on(sbi, list_empty(head) || cur->page != page);
+	f2fs_bug_on(sbi, !cur);
 	list_del(&cur->list);
 	mutex_unlock(&fi->inmem_lock);
 
@@ -496,7 +499,7 @@ void f2fs_balance_fs(struct f2fs_sb_info *sbi, bool need)
 {
 	if (time_to_inject(sbi, FAULT_CHECKPOINT)) {
 		f2fs_show_injection_info(sbi, FAULT_CHECKPOINT);
-		f2fs_stop_checkpoint(sbi, false);
+		f2fs_stop_checkpoint(sbi, false, STOP_CP_REASON_FAULT_INJECT);
 	}
 
 	/* balance_fs_bg is able to be pending */
@@ -779,8 +782,11 @@ int f2fs_flush_device_cache(struct f2fs_sb_info *sbi)
 		if (!f2fs_test_bit(i, (char *)&sbi->dirty_device))
 			continue;
 		ret = __submit_flush_wait(sbi, FDEV(i).bdev);
-		if (ret)
+		if (ret) {
+			f2fs_stop_checkpoint(sbi, false,
+					STOP_CP_REASON_FLUSH_FAIL);
 			break;
+		}
 
 		spin_lock(&sbi->dev_lock);
 		f2fs_clear_bit(i, (char *)&sbi->dirty_device);
@@ -1535,7 +1541,7 @@ retry:
 		if (i + 1 < dpolicy->granularity)
 			break;
 
-		if (i < DEFAULT_DISCARD_GRANULARITY && dpolicy->ordered)
+		if (i + 1 < DEFAULT_DISCARD_GRANULARITY && dpolicy->ordered)
 			return __issue_discard_cmd_orderly(sbi, dpolicy);
 
 		pend_list = &dcc->pend_list[i];
@@ -2225,6 +2231,8 @@ static void update_sit_entry(struct f2fs_sb_info *sbi, block_t blkaddr, int del)
 #endif
 
 	segno = GET_SEGNO(sbi, blkaddr);
+	if (segno == NULL_SEGNO)
+		return;
 
 	se = get_seg_entry(sbi, segno);
 	new_vblocks = se->valid_blocks + del;
@@ -2607,7 +2615,7 @@ static unsigned int __get_next_segno(struct f2fs_sb_info *sbi, int type)
 		return SIT_I(sbi)->last_victim[ALLOC_NEXT];
 
 	/* find segments from 0 to reuse freed segments */
-	if (F2FS_OPTION(sbi).alloc_mode == ALLOC_MODE_REUSE)
+	if (f2fs_get_alloc_mode(sbi) == ALLOC_MODE_REUSE)
 		return 0;
 
 	return curseg->segno;
@@ -3397,8 +3405,7 @@ void f2fs_allocate_data_block(struct f2fs_sb_info *sbi, struct page *page,
 	 * since SSR needs latest valid block information.
 	 */
 	update_sit_entry(sbi, *new_blkaddr, 1);
-	if (GET_SEGNO(sbi, old_blkaddr) != NULL_SEGNO)
-		update_sit_entry(sbi, old_blkaddr, -1);
+	update_sit_entry(sbi, old_blkaddr, -1);
 
 	if (!__has_curseg_space(sbi, curseg)) {
 		if (from_gc)

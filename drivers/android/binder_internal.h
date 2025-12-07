@@ -113,8 +113,14 @@ DEFINE_SHOW_ATTRIBUTE(binder_stats);
 int binder_state_show(struct seq_file *m, void *unused);
 DEFINE_SHOW_ATTRIBUTE(binder_state);
 
+int binder_state_hashed_show(struct seq_file *m, void *unused);
+DEFINE_SHOW_ATTRIBUTE(binder_state_hashed);
+
 int binder_transactions_show(struct seq_file *m, void *unused);
 DEFINE_SHOW_ATTRIBUTE(binder_transactions);
+
+int binder_transactions_hashed_show(struct seq_file *m, void *unused);
+DEFINE_SHOW_ATTRIBUTE(binder_transactions_hashed);
 
 int binder_transaction_log_show(struct seq_file *m, void *unused);
 DEFINE_SHOW_ATTRIBUTE(binder_transaction_log);
@@ -180,6 +186,10 @@ struct binder_work {
 		BINDER_WORK_DEAD_BINDER,
 		BINDER_WORK_DEAD_BINDER_AND_CLEAR,
 		BINDER_WORK_CLEAR_DEATH_NOTIFICATION,
+#ifndef __GENKSYMS__
+		BINDER_WORK_FROZEN_BINDER,
+		BINDER_WORK_CLEAR_FREEZE_NOTIFICATION,
+#endif
 	} type;
 };
 
@@ -301,6 +311,14 @@ struct binder_ref_death {
 	binder_uintptr_t cookie;
 };
 
+struct binder_ref_freeze {
+	struct binder_work work;
+	binder_uintptr_t cookie;
+	bool is_frozen:1;
+	bool sent:1;
+	bool resend:1;
+};
+
 /**
  * struct binder_ref_data - binder_ref counts and id
  * @debug_id:        unique ID for the ref
@@ -333,6 +351,8 @@ struct binder_ref_data {
  *               @node indicates the node must be freed
  * @death:       pointer to death notification (ref_death) if requested
  *               (protected by @node->lock)
+ * @freeze:      pointer to freeze notification (ref_freeze) if requested
+ *               (protected by @node->lock)
  *
  * Structure to track references from procA to target node (on procB). This
  * structure is unsafe to access without holding @proc->outer_lock.
@@ -349,6 +369,7 @@ struct binder_ref {
 	struct binder_proc *proc;
 	struct binder_node *node;
 	struct binder_ref_death *death;
+	struct binder_ref_freeze *freeze;
 };
 
 /**
@@ -365,6 +386,12 @@ struct binder_ref {
 struct binder_priority {
 	unsigned int sched_policy;
 	int prio;
+};
+
+enum binder_prio_state {
+	BINDER_PRIO_SET,	/* desired priority set */
+	BINDER_PRIO_PENDING,	/* initiated a saved priority restore */
+	BINDER_PRIO_ABORT,	/* abort the pending priority restore */
 };
 
 /**
@@ -479,6 +506,8 @@ struct binder_proc {
  * @cred                  struct cred associated with the `struct file`
  *                        in binder_open()
  *                        (invariant after initialized)
+ * @delivered_freeze:     list of delivered freeze notification
+ *                        (protected by @inner_lock)
  *
  * Extended binder_proc -- needed to add the "cred" field without
  * changing the KMI for binder_proc.
@@ -486,6 +515,7 @@ struct binder_proc {
 struct binder_proc_ext {
 	struct binder_proc proc;
 	const struct cred *cred;
+	struct list_head delivered_freeze;
 };
 
 static inline const struct cred *binder_get_cred(struct binder_proc *proc)
@@ -494,6 +524,12 @@ static inline const struct cred *binder_get_cred(struct binder_proc *proc)
 
 	eproc = container_of(proc, struct binder_proc_ext, proc);
 	return eproc->cred;
+}
+
+static inline
+struct binder_proc_ext *proc_wrapper(struct binder_proc *proc)
+{
+	return container_of(proc, struct binder_proc_ext, proc);
 }
 
 /**
@@ -530,6 +566,12 @@ static inline const struct cred *binder_get_cred(struct binder_proc *proc)
  *                        when outstanding transactions are cleaned up
  *                        (protected by @proc->inner_lock)
  * @task:                 struct task_struct for this thread
+ * @prio_lock:            protects thread priority fields
+ * @prio_next:            saved priority to be restored next
+ *                        (protected by @prio_lock)
+ * @prio_state:           state of the priority restore process as
+ *                        defined by enum binder_prio_state
+ *                        (protected by @prio_lock)
  *
  * Bookkeeping structure for binder threads.
  */
@@ -550,6 +592,9 @@ struct binder_thread {
 	atomic_t tmp_ref;
 	bool is_dead;
 	struct task_struct *task;
+	spinlock_t prio_lock;
+	struct binder_priority prio_next;
+	enum binder_prio_state prio_state;
 };
 
 /**
@@ -586,6 +631,7 @@ struct binder_transaction {
 	struct binder_priority	priority;
 	struct binder_priority	saved_priority;
 	bool    set_priority_called;
+	bool    is_nested;
 	kuid_t	sender_euid;
 	struct list_head fd_fixups;
 	binder_uintptr_t security_ctx;

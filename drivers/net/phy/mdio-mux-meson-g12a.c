@@ -4,6 +4,7 @@
  */
 
 #include <linux/bitfield.h>
+#include <linux/delay.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/device.h>
@@ -166,6 +167,7 @@ static const struct clk_ops g12a_ephy_pll_ops = {
 
 static int g12a_enable_internal_mdio(struct g12a_mdio_mux *priv)
 {
+	u32 value;
 	int ret;
 #ifdef CONFIG_AMLOGIC_ETH_PRIVE
 	void __iomem *tx_amp_src = NULL;
@@ -233,6 +235,12 @@ static int g12a_enable_internal_mdio(struct g12a_mdio_mux *priv)
 	if ((cts_valid) && (cts_enhance))
 		writel(0x0400000, priv->regs + ETH_PLL_CTL3);
 #endif
+	value |= PHY_CNTL1_PHY_ENB;
+	writel(value, priv->regs + ETH_PHY_CNTL1);
+
+	/* The phy needs a bit of time to power up */
+	mdelay(10);
+
 	return 0;
 }
 

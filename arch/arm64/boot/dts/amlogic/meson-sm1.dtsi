@@ -813,6 +813,10 @@
 		compatible = "amlogic, vdac-sm1";
 		status = "okay";
 	};
+	opp-1000000000 {
+		opp-hz = /bits/ 64 <1000000000>;
+		opp-microvolt = <770000>;
+	};
 
 	chosen {
 		kaslr-seed = <0x0 0x0>;
