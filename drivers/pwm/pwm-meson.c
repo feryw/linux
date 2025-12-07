@@ -154,14 +154,6 @@ static int meson_pwm_request(struct pwm_chip *chip, struct pwm_device *pwm)
 			dev_err(dev, "failed to set pwm clock rate\n");
 			return err;
 		}
-	} else if (channel->clk_parent) {
-		err = clk_set_parent(channel->clk, channel->clk_parent);
-		if (err < 0) {
-			dev_err(dev, "failed to set parent %s for %s: %d\n",
-				__clk_get_name(channel->clk_parent),
-				__clk_get_name(channel->clk), err);
-			return err;
-		}
 	}
 
 	err = clk_prepare_enable(channel->clk);
@@ -291,40 +283,6 @@ static void meson_pwm_enable(struct pwm_chip *chip, struct pwm_device *pwm)
 static void meson_pwm_disable(struct pwm_chip *chip, struct pwm_device *pwm)
 {
 	struct meson_pwm *meson = to_meson_pwm(chip);
-	struct meson_pwm_channel *channel = &meson->channels[pwm->hwpwm];
-	struct meson_pwm_channel_data *channel_data;
-	unsigned long flags;
-	u32 value;
-	int err;
-
-	channel_data = &meson_pwm_per_channel_data[pwm->hwpwm];
-
-	spin_lock_irqsave(&meson->lock, flags);
-
-	value = readl(meson->base + REG_MISC_AB);
-	value &= ~channel_data->pwm_en_mask;
-
-	if (meson->data->has_polarity) {
-		value &= ~channel_data->inv_en_mask;
-		if (channel->inverted)
-			value |= channel_data->inv_en_mask;
-	}
-
-	value = readl(meson->base + REG_MISC_AB);
-	value |= channel_data->pwm_en_mask;
-	writel(value, meson->base + REG_MISC_AB);
-
-	spin_unlock_irqrestore(&meson->lock, flags);
-
-	if (meson->data->nomux) {
-		err = clk_set_rate(channel->clk, XTAL_RATE / (channel->pre_div + 1));
-		if (err)
-			dev_err(meson->chip.dev, "failed to set pwm clock rate\n");
-	}
-}
-
-static void meson_pwm_disable(struct meson_pwm *meson, struct pwm_device *pwm)
-{
 	unsigned long flags;
 	u32 value;
 
@@ -576,53 +534,117 @@ static int meson_pwm_init_channels_s4(struct pwm_chip *chip)
 	return 0;
 }
 
+static const char *pwm_meson8b_parent_names[] = {
+    "xtal",
+    "fclk_div4",
+    "fclk_div3",
+};
+
 static const struct meson_pwm_data pwm_meson8b_data = {
-	.parent_names = { "xtal", NULL, "fclk_div4", "fclk_div3" },
-	.channels_init = meson_pwm_init_channels_meson8b_legacy,
+    .parent_names = pwm_meson8b_parent_names,
+    .num_parents  = ARRAY_SIZE(pwm_meson8b_parent_names),
+    .channels_init = meson_pwm_init_channels_meson8b_legacy,
 };
 
 /*
  * Only the 2 first inputs of the GXBB AO PWMs are valid
  * The last 2 are grounded
  */
+/* Parent names array for GXBB AO PWM */
+static const char *pwm_gxbb_ao_parent_names[] = {
+    "xtal",
+    "clk81",
+};
+
 static const struct meson_pwm_data pwm_gxbb_ao_data = {
-	.parent_names = { "xtal", "clk81", NULL, NULL },
-	.channels_init = meson_pwm_init_channels_meson8b_legacy,
+    .parent_names  = pwm_gxbb_ao_parent_names,
+    .num_parents   = ARRAY_SIZE(pwm_gxbb_ao_parent_names),
+    .channels_init = meson_pwm_init_channels_meson8b_legacy,
 };
 
+/* Parent names array for AXG EE PWM */
+static const char *pwm_axg_ee_parent_names[] = {
+    "xtal",
+    "fclk_div5",
+    "fclk_div4",
+    "fclk_div3",
+};
+
+/* PWM data struct */
 static const struct meson_pwm_data pwm_axg_ee_data = {
-	.parent_names = { "xtal", "fclk_div5", "fclk_div4", "fclk_div3" },
-	.channels_init = meson_pwm_init_channels_meson8b_legacy,
-	.has_constant = true,
-	.has_polarity = true,
+    .parent_names  = pwm_axg_ee_parent_names,
+    .num_parents   = ARRAY_SIZE(pwm_axg_ee_parent_names),
+    .channels_init = meson_pwm_init_channels_meson8b_legacy,
+    .has_constant  = true,
+    .has_polarity  = true,
 };
 
+/* Parent names array for AXG AO PWM */
+static const char *pwm_axg_ao_parent_names[] = {
+    "xtal",
+    "axg_ao_clk81",
+    "fclk_div4",
+    "fclk_div5",
+};
+
+/* PWM data struct */
 static const struct meson_pwm_data pwm_axg_ao_data = {
-	.parent_names = { "xtal", "axg_ao_clk81", "fclk_div4", "fclk_div5" },
-	.channels_init = meson_pwm_init_channels_meson8b_legacy,
-	.has_constant = true,
-	.has_polarity = true,
+    .parent_names  = pwm_axg_ao_parent_names,
+    .num_parents   = ARRAY_SIZE(pwm_axg_ao_parent_names),
+    .channels_init = meson_pwm_init_channels_meson8b_legacy,
+    .has_constant  = true,
+    .has_polarity  = true,
 };
 
+/* Parent names array for pwm_g12a_ee */
+static const char *pwm_g12a_ee_parent_names[] = {
+    "xtal",
+    NULL,
+    "fclk_div4",
+    "fclk_div3",
+};
+
+/* PWM data struct */
 static const struct meson_pwm_data pwm_g12a_ee_data = {
-	.parent_names = { "xtal", NULL, "fclk_div4", "fclk_div3" },
-	.channels_init = meson_pwm_init_channels_meson8b_legacy,
-	.has_constant = true,
-	.has_polarity = true,
+    .parent_names  = pwm_g12a_ee_parent_names,
+    .num_parents   = ARRAY_SIZE(pwm_g12a_ee_parent_names),
+    .channels_init = meson_pwm_init_channels_meson8b_legacy,
+    .has_constant  = true,
+    .has_polarity  = true,
 };
 
+/* Parent names array */
+static const char *pwm_g12a_ao_ab_parent_names[] = {
+    "xtal",
+    "g12a_ao_clk81",
+    "fclk_div4",
+    "fclk_div5",
+};
+
+/* PWM data struct */
 static const struct meson_pwm_data pwm_g12a_ao_ab_data = {
-	.parent_names = { "xtal", "g12a_ao_clk81", "fclk_div4", "fclk_div5" },
-	.channels_init = meson_pwm_init_channels_meson8b_legacy,
-	.has_constant = true,
-	.has_polarity = true,
+    .parent_names  = pwm_g12a_ao_ab_parent_names,
+    .num_parents   = ARRAY_SIZE(pwm_g12a_ao_ab_parent_names),
+    .channels_init = meson_pwm_init_channels_meson8b_legacy,
+    .has_constant  = true,
+    .has_polarity  = true,
 };
 
+/* Define parent names as a static array */
+static const char *pwm_g12a_ao_cd_parent_names[] = {
+    "xtal",
+    "g12a_ao_clk81",
+    NULL,
+    NULL,
+};
+
+/* Assign the pointer in the struct */
 static const struct meson_pwm_data pwm_g12a_ao_cd_data = {
-	.parent_names = { "xtal", "g12a_ao_clk81", NULL, NULL },
-	.channels_init = meson_pwm_init_channels_meson8b_legacy,
-	.has_constant = true,
-	.has_polarity = true,
+    .parent_names = pwm_g12a_ao_cd_parent_names,
+    .num_parents  = ARRAY_SIZE(pwm_g12a_ao_cd_parent_names),
+    .channels_init = meson_pwm_init_channels_meson8b_legacy,
+    .has_constant  = true,
+    .has_polarity  = true,
 };
 
 static const struct meson_pwm_data pwm_meson8_v2_data = {
@@ -639,9 +661,6 @@ static const struct meson_pwm_data pwm_s4_data = {
 	.channels_init = meson_pwm_init_channels_s4,
 	.has_constant = true,
 	.has_polarity = true,
-};
-
-static const struct meson_pwm_data pwm_s4_data = {
 	.nomux = 1,
 };
 
@@ -698,61 +717,6 @@ static const struct of_device_id meson_pwm_matches[] = {
 	{},
 };
 MODULE_DEVICE_TABLE(of, meson_pwm_matches);
-
-static int meson_pwm_init_channels(struct meson_pwm *meson)
-{
-	struct device *dev = meson->chip.dev;
-	struct clk_init_data init;
-	unsigned int i;
-	char name[255];
-	int err;
-
-	for (i = 0; i < meson->chip.npwm; i++) {
-		struct meson_pwm_channel *channel = &meson->channels[i];
-
-		if (meson->data->nomux) {
-			snprintf(name, sizeof(name), "clkin%u", i);
-			channel->clk = devm_clk_get(dev, name);
-			if (IS_ERR(channel->clk)) {
-				dev_err(dev, "can't get pwm clock: %pe\n", channel->clk);
-				return PTR_ERR(channel->clk);
-			}
-			continue;
-		}
-
-		snprintf(name, sizeof(name), "%s#mux%u", dev_name(dev), i);
-
-		init.name = name;
-		init.ops = &clk_mux_ops;
-		init.flags = 0;
-		init.parent_names = meson->data->parent_names;
-		init.num_parents = meson->data->num_parents;
-
-		channel->mux.reg = meson->base + REG_MISC_AB;
-		channel->mux.shift =
-				meson_pwm_per_channel_data[i].clk_sel_shift;
-		channel->mux.mask = MISC_CLK_SEL_MASK;
-		channel->mux.flags = 0;
-		channel->mux.lock = &meson->lock;
-		channel->mux.table = NULL;
-		channel->mux.hw.init = &init;
-
-		channel->clk = devm_clk_register(dev, &channel->mux.hw);
-		if (IS_ERR(channel->clk)) {
-			err = PTR_ERR(channel->clk);
-			dev_err(dev, "failed to register %s: %d\n", name, err);
-			return err;
-		}
-
-		snprintf(name, sizeof(name), "clkin%u", i);
-
-		channel->clk_parent = devm_clk_get_optional(dev, name);
-		if (IS_ERR(channel->clk_parent))
-			return PTR_ERR(channel->clk_parent);
-	}
-
-	return 0;
-}
 
 static int meson_pwm_probe(struct platform_device *pdev)
 {

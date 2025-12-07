@@ -105,7 +105,7 @@
 #define   IRQ_RESP_STATUS BIT(14)
 #define   IRQ_SDIO BIT(15)
 #define   IRQ_EN_MASK \
-	(IRQ_CRC_ERR | IRQ_TIMEOUTS | IRQ_END_OF_CHAIN | IRRQ_SDIO)
+	(IRQ_CRC_ERR | IRQ_TIMEOUTS | IRQ_END_OF_CHAIN | IRQ_SDIO)
 
 #define SD_EMMC_CMD_CFG 0x50
 #define SD_EMMC_CMD_ARG 0x54
@@ -931,7 +931,7 @@ static void meson_mmc_read_resp(struct mmc_host *mmc, struct mmc_command *cmd)
 	}
 }
 
-static void __meson_mmc_enable_sdio_irq(struct mmc_host *mmc, int enable)
+static __maybe_unused void __meson_mmc_enable_sdio_irq(struct mmc_host *mmc, int enable)
 {
 	struct meson_host *host = mmc_priv(mmc);
 	u32 reg_irqen = IRQ_EN_MASK;

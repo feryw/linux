@@ -279,6 +279,7 @@ static inline void i2c_gpio_fault_injector_init(struct platform_device *pdev) {}
 static void i2c_gpio_get_properties(struct device *dev,
 				    struct i2c_gpio_platform_data *pdata)
 {
+	struct device_node *np = dev->of_node;
 	u32 reg;
 
 	device_property_read_u32(dev, "i2c-gpio,delay-us", &pdata->udelay);

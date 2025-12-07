@@ -319,16 +319,16 @@ static void meson_uart_change_speed(struct uart_port *port, unsigned long baud)
 		unsigned int xtal_div = 3;
 
 		/* Choose divisor based on SoC quirks */
-		if (private_data && private_data->has_xtal_div2)
+		if (private_data && private_data->has_xtal_div2) {
 			xtal_div = 2;
-		else if (of_device_is_compatible(port->dev->of_node, "amlogic,meson-gxl-uart"))
+		} else if (of_device_is_compatible(port->dev->of_node, "amlogic,meson-gxl-uart")) {
 			xtal_div = 2;
+		}
 
 		val = DIV_ROUND_CLOSEST(port->uartclk / xtal_div, baud) - 1;
 		val |= AML_UART_BAUD_XTAL;
-		if (xtal_div == 2)
+		if (xtal_div == 2) {
 			val |= AML_UART_BAUD_XTAL_DIV2;
-
 		} else {
 			/* Fallback path */
 			val = DIV_ROUND_CLOSEST(port->uartclk / 4, baud) - 1;

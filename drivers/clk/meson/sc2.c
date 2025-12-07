@@ -23,8 +23,6 @@
 #include "sc2.h"
 #include <dt-bindings/clock/amlogic,sc2-clkc.h>
 
-static DEFINE_SPINLOCK(meson_clk_lock);
-
 static struct clk_regmap sc2_fixed_pll_dco = {
 	.data = &(struct meson_clk_pll_data){
 		.en = {
@@ -1476,7 +1474,7 @@ static struct clk_regmap sc2_mpll0_div = {
 			.shift   = 29,
 			.width	 = 1,
 		},
-		.lock = &meson_clk_lock,
+		// .lock = &meson_clk_lock,
 		.init_regs = sc2_mpll0_init_regs,
 		.init_count = ARRAY_SIZE(sc2_mpll0_init_regs),
 	},
@@ -1530,7 +1528,7 @@ static struct clk_regmap sc2_mpll1_div = {
 			.shift   = 29,
 			.width	 = 1,
 		},
-		.lock = &meson_clk_lock,
+		// .lock = &meson_clk_lock,
 		.init_regs = sc2_mpll1_init_regs,
 		.init_count = ARRAY_SIZE(sc2_mpll1_init_regs),
 	},
@@ -1584,7 +1582,7 @@ static struct clk_regmap sc2_mpll2_div = {
 			.shift   = 29,
 			.width	 = 1,
 		},
-		.lock = &meson_clk_lock,
+		// .lock = &meson_clk_lock,
 		.init_regs = sc2_mpll2_init_regs,
 		.init_count = ARRAY_SIZE(sc2_mpll2_init_regs),
 	},
@@ -1638,7 +1636,7 @@ static struct clk_regmap sc2_mpll3_div = {
 			.shift   = 29,
 			.width	 = 1,
 		},
-		.lock = &meson_clk_lock,
+		// .lock = &meson_clk_lock,
 		.init_regs = sc2_mpll3_init_regs,
 		.init_count = ARRAY_SIZE(sc2_mpll3_init_regs),
 	},

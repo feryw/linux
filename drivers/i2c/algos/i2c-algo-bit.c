@@ -487,14 +487,14 @@ static int bit_doAddress(struct i2c_adapter *i2c_adap, struct i2c_msg *msg)
 		bit_dbg(2, &i2c_adap->dev, "addr0: %d\n", addr);
 		/* try extended address code...*/
 		ret = try_address(i2c_adap, addr, retries);
-		if ((ret != 1) && !nak_ok)  {
+		if (ret != 1 && !nak_ok)  {
 			dev_err(&i2c_adap->dev,
 				"died at extended address code\n");
 			return -ENXIO;
 		}
 		/* the remaining 8 bit address */
 		ret = i2c_outb(i2c_adap, msg->addr & 0xff);
-		if ((ret != 1) && !nak_ok) {
+		if (ret != 1 && !nak_ok) {
 			/* the chip did not ack / xmission error occurred */
 			dev_err(&i2c_adap->dev, "died at 2nd address code\n");
 			return -ENXIO;
@@ -506,7 +506,7 @@ static int bit_doAddress(struct i2c_adapter *i2c_adap, struct i2c_msg *msg)
 			/* okay, now switch into reading mode */
 			addr |= 0x01;
 			ret = try_address(i2c_adap, addr, retries);
-			if ((ret != 1) && !nak_ok) {
+			if (ret != 1 && !nak_ok) {
 				dev_err(&i2c_adap->dev,
 					"died at repeated address code\n");
 				return -EIO;
@@ -517,7 +517,7 @@ static int bit_doAddress(struct i2c_adapter *i2c_adap, struct i2c_msg *msg)
 		if (flags & I2C_M_REV_DIR_ADDR)
 			addr ^= 1;
 		ret = try_address(i2c_adap, addr, retries);
-		if ((ret != 1) && !nak_ok)
+		if (ret != 1 && !nak_ok)
 			return -ENXIO;
 	}
 
@@ -622,7 +622,6 @@ static u32 bit_func(struct i2c_adapter *adap)
 	       I2C_FUNC_10BIT_ADDR | I2C_FUNC_PROTOCOL_MANGLING;
 }
 
-
 /* -----exported algorithm data: -------------------------------------	*/
 
 const struct i2c_algorithm i2c_bit_algo = {
@@ -666,12 +665,12 @@ static int __i2c_bit_add_bus(struct i2c_adapter *adap,
 	if (ret < 0)
 		return ret;
 
-	if (bit_adap->getscl == NULL && bit_adap->getsda == NULL)
+	if (bit_adap->getscl == NULL && bit_adap->getsda == NULL) {
 		dev_info(&adap->dev, "I2C-like interface, SDA and SCL are write-only\n");
-	else if (bit_adap->getscl == NULL) {
+	} else if (bit_adap->getscl == NULL) {
 		/* Complain if SCL can't be read */
 		dev_warn(&adap->dev, "Not I2C compliant: can't read SCL\n");
-
+	}
 	if (bit_adap->getsda == NULL || bit_adap->getscl == NULL)
 		dev_warn(&adap->dev, "Bus may be unreliable\n");
 

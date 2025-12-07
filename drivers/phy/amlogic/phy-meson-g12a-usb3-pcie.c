@@ -388,6 +388,7 @@ static int phy_g12a_usb3_pcie_probe(struct platform_device *pdev)
 	struct phy_g12a_usb3_pcie_priv *priv;
 	struct phy_provider *phy_provider;
 	void __iomem *base;
+	int ret;
 
 	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)

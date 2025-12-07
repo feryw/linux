@@ -94,6 +94,6 @@ config PINCTRL_MESON_SC2
 	tristate "Meson sc2 Soc pinctrl driver"
 	depends on ARM64
 	select PINCTRL_MESON_AXG_PMX
-	default y
+	default ARCH_MESON
 
 endif
