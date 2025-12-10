@@ -43,6 +43,26 @@ Pastikan toolchain tersedia:
 
     sudo apt install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
+Build Modules
+-------------
+
+Masuk ke direktori kernel, kemudian jalankan:
+
+    make modules
+
+Perintah ini akan membangun seluruh modul (.ko) yang tersedia dalam source
+kernel.
+
+Build Kernel
+------------
+
+Untuk membangun kernel utama (Image, modul, dan object lain), gunakan:
+
+    make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error" -j$(nproc)
+
+Opsi `-Wno-error` digunakan untuk mengabaikan warning tertentu yang dianggap
+error oleh compiler.
+
 Build Driver UWE5621 (Unisoc)
 -----------------------------
 
@@ -55,11 +75,11 @@ variable berikut:
     export PWD=$(pwd)                               # Folder driver unisoc_uwe5621
     export OUT_DIR=/home/USER/linux-amlogic/build   # Output folder opsional
 
-Perintah build:
+Perintah build modul:
 
     make -C $KERNEL_SRC M=$PWD modules
 
-Modul hasil kompilasi akan berada di dalam direktori build atau di folder driver,
+Modul hasil kompilasi akan berada di dalam direktori build atau folder driver,
 sesuai konfigurasi yang digunakan.
 
 Catatan
