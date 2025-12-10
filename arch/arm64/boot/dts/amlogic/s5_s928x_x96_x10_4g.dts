@@ -1,0 +1,25 @@
+#include "s5_s928x_ax201_v2_linux.dts"
+#include "coreelec_s5_common.dtsi"
+
+/ {
+	model = "X96 X10";
+	coreelec-dt-id = "s5_s928x_x96_x10_4g";
+	amlogic-dt-id = "s5_s928x_ax201-v2";
+
+	auge_sound {
+		avout_mute-gpios = <&gpio GPIOA_7 GPIO_ACTIVE_HIGH>;
+	};
+
+	gpio_keypad {
+		key_num = <1>;
+		key_name = "power";
+		key_code = <116>;
+		key-gpios = <&gpio GPIOD_2 GPIO_ACTIVE_HIGH>;
+	};
+
+	/delete-node/ gpioleds;
+};
+
+&i2c1 {
+	status = "disabled";
+};

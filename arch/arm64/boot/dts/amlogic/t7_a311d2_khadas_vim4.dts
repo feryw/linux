@@ -1,0 +1,9 @@
+#include "t7_a311d2_an400_drm_hdmitx_only.dts"
+#include "coreelec_t7_common.dtsi"
+#include "a311d2_khadas_vim4_base.dtsi"
+
+/ {
+	model = "Khadas VIM4";
+	coreelec-dt-id = "t7_a311d2_khadas_vim4";
+	amlogic-dt-id = "t7_a311d2_an400-8g";
+};

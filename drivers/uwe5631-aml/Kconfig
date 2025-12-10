@@ -1,0 +1,5 @@
+config UNISOC_UWE5621
+    tristate "Unisoc UWE5621 WiFi driver"
+    default m
+    help
+      WiFi driver for Unisoc UWE5621 chip.
