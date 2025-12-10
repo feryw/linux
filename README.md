@@ -32,6 +32,10 @@ format reStructuredText (RST). Pastikan membaca:
 File tersebut menjelaskan persyaratan build kernel dan potensi masalah ketika
 melakukan upgrade kernel.
 
+Kernel ini telah diuji dan dimodifikasi untuk mendukung beberapa SoC Amlogic ARM64:
+
+- **Amlogic S905X4 (AX810/AT01)**
+  
 Compiler yang digunakan
 -----------------------
 
