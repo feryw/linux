@@ -482,6 +482,11 @@
 			opp-hz = /bits/ 64 <2004000000>;
 			opp-microvolt = <1009000>;
 		};
+		opp13 {
+			opp-hz = /bits/ 64 <2100000000>;
+			opp-microvolt = <919000>;
+		};
+		
 	};
 
 	cpu_opp_table1: cpu_opp_table1 {
@@ -540,6 +545,10 @@
 		opp12 {
 			opp-hz = /bits/ 64 <2004000000>;
 			opp-microvolt = <1009000>;
+		};
+		opp13 {
+			opp-hz = /bits/ 64 <2100000000>;
+			opp-microvolt = <919000>;
 		};
 	};
 
@@ -600,6 +609,10 @@
 			opp-hz = /bits/ 64 <2004000000>;
 			opp-microvolt = <999000>;
 		};
+		opp13 {
+			opp-hz = /bits/ 64 <2100000000>;
+			opp-microvolt = <919000>;
+		};
 	};
 
 	cpu_opp_table3: cpu_opp_table3 {
@@ -658,6 +671,10 @@
 		opp12 {
 			opp-hz = /bits/ 64 <2004000000>;
 			opp-microvolt = <959000>;
+		};
+		opp13 {
+			opp-hz = /bits/ 64 <2100000000>;
+			opp-microvolt = <919000>;
 		};
 	};
 
